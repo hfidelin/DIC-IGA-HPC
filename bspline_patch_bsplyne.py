@@ -184,6 +184,7 @@ class BSplinePatch(object):
         if self.dim == 2:
             n = np.c_[ctrlPts[0].ravel(order='F'),
                   ctrlPts[1].ravel(order='F')]
+        
         elif self.dim == 3:
             n = np.c_[ctrlPts[0].ravel(order='F'),
                   ctrlPts[1].ravel(order='F'),
@@ -205,14 +206,14 @@ class BSplinePatch(object):
                                 n[:, 2].reshape(nbf, order='F')])
             
         return ctrlPts
-    
+    """
     def BS2FE(self, U, n=[30, 30]):
         xi = np.linspace(self.knotVect[0][self.degree[0]],
                          self.knotVect[0][-self.degree[0]], n[0])
         eta = np.linspace(self.knotVect[1][self.degree[1]],
                           self.knotVect[1][-self.degree[1]], n[1])
-        phi, b, c = self.ShapeFunctionsAtGridPoints(xi, eta)
-        """
+        phi, _, _ = self.ShapeFunctionsAtGridPoints(xi, eta)
+        
         x = phi.dot(self.n[:, 0])
         y = phi.dot(self.n[:, 1])
         roi = np.c_[np.ones(2), n].T-1
@@ -227,85 +228,69 @@ class BSplinePatch(object):
         return mfe, V, phi
         """
 
-    def ShapeFunctionsAtGridPoints(self, xi, eta):
-        """ xi and eta are the 1d points 
+    def ShapeFunctionsAtGridPoints(self, xi, eta, zeta=None):
+        """ xi, eta (and zeta in 3D) are the 1d points 
         This method computes the basis functions on the mesh-grid point 
-        obtained from the 1d vector points xi and eta 
+        obtained from the 1d vector points xi, eta (and zeta)
         """
+        
+            
         basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
         basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
         
-        N_xi, DN_xi = global_basisfuns(self.degree[0], self.knotVect[0], xi)
-        N_eta, DN_eta = global_basisfuns(self.degree[1], self.knotVect[1], eta)
-        phi_xi = basis_xi.N(xi)
-        phi_eta = basis_eta.N(eta)
-        
-        print(f"Correct : {N.shape} | Bsplyne = {phi_xi.shape}")
-        
-        
-        
-        dphi_xi = basis_xi.N(xi, k=1)
-        dphi_eta = basis_eta.N(eta, k=1)
-        
-        # print(DN == dphi_xi)
-        
-        phi = sps.kron(phi_eta,  phi_xi,  'csc')
-               
-        
-        dphidxi = sps.kron(phi_eta,  dphi_xi,  'csc')
-        dphideta = sps.kron(dphi_eta,  phi_xi,  'csc')
-        
-           
-        P = self.Get_P()
-        
-        dxdxi = dphidxi.dot(P[:, 0])
-        dxdeta = dphideta.dot(P[:, 0])
-        dydxi = dphidxi.dot(P[:, 1])
-        dydeta = dphideta.dot(P[:, 1])
-        detJ = dxdxi*dydeta - dydxi*dxdeta
-        
-        
-        return phi, phi ,phi
-    
-        """
-        
-        
-        dphidx = sps.diags(dydeta/detJ).dot(dphidxi) + \
-            sps.diags(-dydxi/detJ).dot(dphideta)
-        dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
-            sps.diags(dxdxi/detJ).dot(dphideta)
-        # Univariate basis functions if needed
-        # Nxi  = phi_xi
-        # Neta = phi_eta
-        N = phi
-        return N, dphidx, dphidy
-        """
+        phi_xi, dphi_xi = basis_xi.N(xi), basis_xi.N(xi, k=1)
+        phi_eta, dphi_eta = basis_eta.N(eta), basis_eta.N(eta, k=1)
+                        
+        if self.dim == 2:    
             
+            phi = sps.kron(phi_eta,  phi_xi, 'csc')            
+            dphidxi = sps.kron(phi_eta,  dphi_xi, 'csc')
+            dphideta = sps.kron(dphi_eta,  phi_xi, 'csc')
+            
+            
+            P = self.Get_P()
+            
+            dxdxi = dphidxi.dot(P[:, 0])
+            dxdeta = dphideta.dot(P[:, 0])
+            dydxi = dphidxi.dot(P[:, 1])
+            dydeta = dphideta.dot(P[:, 1])
+            detJ = dxdxi*dydeta - dydxi*dxdeta
+            dphidx = sps.diags(dydeta/detJ).dot(dphidxi) + \
+                sps.diags(-dydxi/detJ).dot(dphideta)
+            dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
+                sps.diags(dxdxi/detJ).dot(dphideta)
+            # Univariate basis functions if needed
+            # Nxi  = phi_xi
+            # Neta = phi_eta
+            N = phi
+            return N, dphidx, dphidy
         
-        
-# %% MAIN
+        elif self.dim == 3 :
+            
+            basis_zeta = bs.BSplineBasis(self.degree[2], self.knotVect[2])
+            phi_zeta = basis_zeta.N(zeta)
+            dphi_zeta = basis_zeta.N(zeta, k=1)
+            
+            
+
 
 if __name__ == "__main__":
     
-    dim = 3
-    N = 10
+    N = 20
     
-    ctrlP_2D = np.array([[0, 0],
-                         [0, 1],
-                         [1, 0],
-                         [1, 1]])
+    a = 0.925
+    X = np.array([[0.5, 0.75, 1],
+               [0.5*a, 0.75*a, 1*a],
+               [0, 0, 0]])
+    Y = np.array([[0, 0, 0],
+               [0.5*a, 0.75*a, 1*a],
+               [0.5, 0.75, 1]])  
+    Z = np.array([[1, 1, 1],
+                [1, 1, 1],
+                [1, 1, 1]]) 
     
-    ctrlP_3D = np.array([[0, 0, 0],
-                     [1, 0, 0,],
-                     [0, 1, 0],
-                     [0, 0, 1],
-                     [0, 1, 1],
-                     [1, 1, 0],
-                     [1, 0, 1],
-                     [1, 1, 1]])
-    
-    ctrlP_3D = ctrlP_3D.T
-    ctrlP_2D = ctrlP_2D.T
+    ctrlP_2D = np.array([X, Y])
+    ctrlP_3D = np.array([X, Y, Z])
     
     xmin = 0 ; xmax = 1
     ymin = 0 ; ymax = 1
@@ -313,7 +298,8 @@ if __name__ == "__main__":
     
     p = 2 ; q = 2 ; r = 2
     
-    degree = [p, q, r]
+    degree_2D = [p, q]
+    degree_3D = [p, q, r]
     
     Xi = np.concatenate(
         (np.repeat(0, p+1), np.repeat(1, p+1)))*(xmax-xmin) + xmin
@@ -326,18 +312,18 @@ if __name__ == "__main__":
     knotVect_2D = [Xi, Eta]
     knotVect_3D = [Xi, Eta, Zeta]
     
-    m2D_ref = BSplinePatch_ref(ctrlPts=ctrlP_2D, degree=degree, knotVect=knotVect_2D)
+    m2D_ref = BSplinePatch_ref(ctrlPts=ctrlP_2D, degree=degree_2D, knotVect=knotVect_2D)
    
-    m2D = BSplinePatch(ctrlPts=ctrlP_2D, degree=degree, knotVect=knotVect_2D)
-    m3D = BSplinePatch(ctrlPts=ctrlP_3D, degree=degree, knotVect=knotVect_3D)
+    m2D = BSplinePatch(ctrlPts=ctrlP_2D, degree=degree_2D, knotVect=knotVect_2D)
+    m3D = BSplinePatch(ctrlPts=ctrlP_3D, degree=degree_3D, knotVect=knotVect_3D)
    
-    xi = np.linspace(knotVect_3D[0][degree[0]], knotVect_3D[0][-degree[0]], 30)
-    eta = np.linspace(knotVect_3D[1][degree[1]], knotVect_3D[1][-degree[1]], 30)
-    zeta = np.linspace(knotVect_3D[2][degree[2]], knotVect_3D[2][-degree[2]], 30)
+    xi = np.linspace(knotVect_3D[0][degree_3D[0]], knotVect_3D[0][-degree_3D[0]], N)
+    eta = np.linspace(knotVect_3D[1][degree_3D[1]], knotVect_3D[1][-degree_3D[1]], N)
+    zeta = np.linspace(knotVect_3D[2][degree_3D[2]], knotVect_3D[2][-degree_3D[2]], N)
     
-    m2D_ref.ShapeFunctionsAtGridPoints(xi, eta)
-    m2D.ShapeFunctionsAtGridPoints(xi, eta)
-    #m2D.ShapeFunctionsAtGridPoints(xi, eta)
+    # %% TEST FONCTIONS
+    
+
     
 
     
