@@ -137,7 +137,7 @@ class BSplinePatch(object):
 
     def Get_nbf(self):
         """ Total number of basis functions """
-        return np.product(self.Get_nbf_1d())
+        return np.prod(self.Get_nbf_1d())
 
     def Get_nbf_elem_1d(self):
         return self.degree + 1
@@ -206,7 +206,7 @@ class BSplinePatch(object):
                                 n[:, 2].reshape(nbf, order='F')])
             
         return ctrlPts
-    """
+    
     def BS2FE(self, U, n=[30, 30]):
         xi = np.linspace(self.knotVect[0][self.degree[0]],
                          self.knotVect[0][-self.degree[0]], n[0])
@@ -226,6 +226,148 @@ class BSplinePatch(object):
         V[mfe.conn[:, 1]] = phi.dot(U[self.conn[:, 1]])
         # mfe.Plot(V*30)
         return mfe, V, phi
+        
+    def VTKSol(self, filename, U=None, n=[30, 30]):
+        # Surface
+        if U is None:
+            U = np.zeros(self.ndof)
+        m, V, phi = self.BS2FE(U, n)
+        m.VTKSol(filename, V)
+        # Control mesh
+        nbf = self.Get_nbf_1d()
+        roi = np.c_[np.ones(2, dtype=int), nbf].T-1
+        mfe = StructuredMeshQ4(roi, 1)
+        mfe.n = np.c_[self.ctrlPts[0].ravel(),
+                      self.ctrlPts[1].ravel()]
+        mfe.Connectivity()
+        V = U.copy()
+        V[self.conn[:, 0]] = U[self.conn[:, 0]].reshape(nbf, order='F').ravel()
+        V[self.conn[:, 1]] = U[self.conn[:, 1]].reshape(nbf, order='F').ravel()
+        mfe.VTKSol(filename+'_cp', V)
+
+    def Plot(self, U=None, n=None, neval=[30, 30], **kwargs):
+        """ Physical elements = Image of the parametric elements on Python """
+        alpha = kwargs.pop("alpha", 1)
+        edgecolor = kwargs.pop("edgecolor", "k")
+        nbf = self.Get_nbf()
+        if n is None:
+            n = self.Get_P()  # control points
+        if U is None:
+            U = np.zeros(2*nbf)
+        Pxm = n[:, 0] + U[:nbf]
+        Pym = n[:, 1] + U[nbf:]
+
+        xi = np.linspace(
+            self.knotVect[0][self.degree[0]], self.knotVect[0][-self.degree[0]], neval[0])
+        eta = np.linspace(
+            self.knotVect[1][self.degree[1]], self.knotVect[1][-self.degree[1]], neval[1])
+        # Iso parameters for the elemnts
+        xiu = np.unique(self.knotVect[0])
+        etau = np.unique(self.knotVect[1])
+
+        # Basis functions
+        basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
+        basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
+        
+        phi_xi, dphi_xi = basis_xi.N(xi), basis_xi.N(xi, k=1)
+        phi_eta, dphi_eta = basis_eta.N(eta), basis_eta.N(eta, k=1)
+        
+        phi_xi1 = basis_xi.N(xiu)
+        phi_eta1 = basis_eta.N(eta)
+        phi_xi2 = basis_xi.N(xi)
+        phi_eta2 = basis_eta.N(etau)
+
+        phi1 = sps.kron(phi_eta1,  phi_xi1,  'csc')
+        phi2 = sps.kron(phi_eta2,  phi_xi2,  'csc')
+
+        xe1 = phi1.dot(Pxm)
+        ye1 = phi1.dot(Pym)
+        xe2 = phi2.dot(Pxm)
+        ye2 = phi2.dot(Pym)
+
+        xe1 = xe1.reshape((xiu.size, neval[1]), order='F')
+        ye1 = ye1.reshape((xiu.size, neval[1]), order='F')
+        xe2 = xe2.reshape((neval[0], etau.size), order='F')
+        ye2 = ye2.reshape((neval[0], etau.size), order='F')
+
+        for i in range(xiu.size):
+            # loop on xi
+            # Getting one eta iso-curve
+            plt.plot(xe1[i, :], ye1[i, :], color=edgecolor,
+                     alpha=alpha, **kwargs)
+
+        for i in range(etau.size):
+            # loop on eta
+            # Getting one xi iso-curve
+            plt.plot(xe2[:, i], ye2[:, i], color=edgecolor,
+                     alpha=alpha, **kwargs)
+        plt.plot(Pxm, Pym, color=edgecolor,
+                 alpha=alpha, marker='o', linestyle='')
+        plt.axis('equal')
+
+    def DegreeElevation(self, new_degree):
+        # m.DegreeElevation(np.array([3, 3]))
+        
+        new_degree = np.array(new_degree)
+        t = new_degree - self.degree
+        # to homogeneous coordinates
+        nbf_xi, nbf_eta = self.Get_nbf_1d()
+        # Degree elevation along the eta direction
+        if t[1] != 0:
+            coefs = self.ctrlPts.reshape((2*nbf_xi, nbf_eta), order="F")
+            self.ctrlPts, self.knotVect[1] = bspdegelev(self.degree[1], coefs, self.knotVect[1], t[1])
+            nbf_eta = self.ctrlPts.shape[1]
+            self.ctrlPts = self.ctrlPts.reshape((2, nbf_xi, nbf_eta), order="F")
+        # Degree elevation along the xi direction
+        if t[0] != 0:
+            coefs = np.transpose(self.ctrlPts, (0, 2, 1))
+            coefs = coefs.reshape((2*nbf_eta, nbf_xi), order="F")
+            self.ctrlPts, self.knotVect[0] = bspdegelev(
+                self.degree[0], coefs, self.knotVect[0], t[0])
+            nbf_xi = self.ctrlPts.shape[1]
+            self.ctrlPts = self.ctrlPts.reshape(
+                (2, nbf_eta, nbf_xi), order="F")
+            self.ctrlPts = np.transpose(self.ctrlPts, (0, 2, 1))
+
+        self.degree = new_degree
+        self.n = self.CrtlPts2N()
+
+    def KnotInsertion(self, knots):
+        # to homogeneous coordinates
+        # Example: m.KnotInsertion([np.array([0.5]), np.array([0.5])])
+        nbf_xi, nbf_eta = self.Get_nbf_1d()
+        nxi = np.size(knots[0])
+        neta = np.size(knots[1])
+        basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
+        basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
+        
+        D_xi = basis_xi.knotInsertion(knots[0])
+        D_eta = basis_eta.knotInsertion(knots[0])
+        
+        self.knotVect[0] = basis_xi.knot
+        self.knotVect[1] = basis_eta.knot
+               
+        
+        """
+        # Degree elevate along the eta direction
+        if neta != 0:
+            coefs = self.ctrlPts.reshape((2*nbf_xi, nbf_eta), order="F")
+            self.ctrlPts, self.knotVect[1] = bspkntins(
+                self.degree[1], coefs, self.knotVect[1], knots[1])
+            nbf_eta = self.ctrlPts.shape[1]
+            self.ctrlPts = self.ctrlPts.reshape(
+                (2, nbf_xi, nbf_eta), order="F")
+        # Degree elevate along the xi direction
+        if nxi != 0:
+            coefs = np.transpose(self.ctrlPts, (0, 2, 1))
+            coefs = coefs.reshape((2*nbf_eta, nbf_xi), order="F")
+            self.ctrlPts, self.knotVect[0] = bspkntins(
+                self.degree[0], coefs, self.knotVect[0], knots[0])
+            nbf_xi = self.ctrlPts.shape[1]
+            self.ctrlPts = self.ctrlPts.reshape(
+                (2, nbf_eta, nbf_xi), order="F")
+            self.ctrlPts = np.transpose(self.ctrlPts, (0, 2, 1))
+        self.n = self.CrtlPts2N()
         """
 
     def ShapeFunctionsAtGridPoints(self, xi, eta, zeta=None):
@@ -322,6 +464,12 @@ if __name__ == "__main__":
     zeta = np.linspace(knotVect_3D[2][degree_3D[2]], knotVect_3D[2][-degree_3D[2]], N)
     
     # %% TEST FONCTIONS
+    n = 5
+    newr = np.linspace(0, 1, n+2)[1:-1]
+    n = 10
+    newt = np.linspace(0, 1, n+2)[1:-1]
+    # m2D_ref.Plot()
+    m2D.KnotInsertion([newt, newr])
     
 
     
