@@ -14,16 +14,14 @@ PYthon library for eXperimental mechanics using Finite ELements
 import os
 import numpy as np
 import scipy as sp
-# from .bspline_routines import bspdegelev, bspkntins, global_basisfuns, Get2dBasisFunctionsAtPts, global_basisfunsWd
 import scipy.sparse as sps
 import matplotlib.pyplot as plt
 from pyxel.camera import Camera
 from pyxel.mesher import StructuredMeshQ4
-from pyxel import BSplinePatch as BSplinePatch_ref
 import bsplyne as bs
 import pyxel as px
+import pickle
 
-    
 
 class BSplinePatch(object):
     def __init__(self, ctrlPts, degree, knotVect):
@@ -79,7 +77,7 @@ class BSplinePatch(object):
         
         
         
-        self.wdetJ = np.empty(0)        # Integration weights diagonal matrix
+        self.wdetJ = np.empty(0)    # Integration weights diagonal matrix
         self.pgx = np.empty(0)
         self.pgy = np.empty(0)
         self.pgz = np.empty(0)
@@ -110,8 +108,10 @@ class BSplinePatch(object):
         m.npg = self.npg
         m.pgx = self.pgx.copy()
         m.pgy = self.pgy.copy()
+        m.pgz = self.pgz.copy()
         m.phix = self.phix.copy()
         m.phiy = self.phiy.copy()
+        m.phiz = self.phiy.copy()
         m.wdetJ = self.wdetJ.copy()
         return m
     
@@ -216,17 +216,17 @@ class BSplinePatch(object):
         elif self.dim == 3 :
             self.conn = np.c_[np.arange(nn), np.arange(nn) + nn, np.arange(nn) + 2 * nn]
 
-    """
-    def Connectivity(self, order = 'C'):
+    """    
+    def Connectivity2(self, order = 'C'):
         nn = len(self.n)
         self.ndof = nn * self.dim
         self.conn = np.arange(self.ndof * nn)
         if order == 'C':
-            self.conn.reshape(self.ndim, nn)
+            self.conn.reshape(self.dim, nn)
         
         elif order == 'N':
-            self.conn.reshape(nn, ndim)
-    """  
+            self.conn.reshape(nn, self.dim)
+    """
 
     def CtrlPts2N(self, ctrlPts=None):
         if ctrlPts is None:
@@ -296,64 +296,86 @@ class BSplinePatch(object):
         V[self.conn[:, 1]] = U[self.conn[:, 1]].reshape(nbf, order='F').ravel()
         mfe.VTKSol(filename+'_cp', V)
 
-    def Plot(self, U=None, n=None, neval=[30, 30], **kwargs):
+    def Plot(self, U=None, n=None, neval=None, **kwargs):
         """ Physical elements = Image of the parametric elements on Python """
+        if neval == None:
+            if self.dim == 2:
+                neval = [30, 30]
+            elif self.dim == 3:
+                neval = [30, 30, 30]
         alpha = kwargs.pop("alpha", 1)
         edgecolor = kwargs.pop("edgecolor", "k")
         nbf = self.Get_nbf()
         if n is None:
             n = self.Get_P()  # control points
         if U is None:
-            U = np.zeros(2*nbf)
-        Pxm = n[:, 0] + U[:nbf]
-        Pym = n[:, 1] + U[nbf:]
-
-        xi = np.linspace(
-            self.knotVect[0][self.degree[0]], self.knotVect[0][-self.degree[0]], neval[0])
-        eta = np.linspace(
-            self.knotVect[1][self.degree[1]], self.knotVect[1][-self.degree[1]], neval[1])
-        # Iso parameters for the elemnts
-        xiu = np.unique(self.knotVect[0])
-        etau = np.unique(self.knotVect[1])
-
-        # Basis functions
-        basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
-        basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
-                
+            U = np.zeros(self.dim*nbf)
+        U = U.reshape((self.dim, -1))    
+            
+        if self.dim == 3:
         
-        phi_xi1 = basis_xi.N(xiu)
-        phi_eta1 = basis_eta.N(eta)
-        phi_xi2 = basis_xi.N(xi)
-        phi_eta2 = basis_eta.N(etau)
+            fig = plt.figure()
+            ax = fig.add_subplot(projection="3d")
+            ax.scatter(*self.ctrlPts, color=edgecolor, alpha=alpha)
+            ax.set_xlabel('X Label')
+            ax.set_ylabel('Y Label')
+            plt.show()
+            
+            
+        elif self.dim == 2:    
+            Pxm = n[:, 0] + U[0]
+            Pym = n[:, 1] + U[1]
+            
+            xi = np.linspace(
+                self.knotVect[0][self.degree[0]], self.knotVect[0][-self.degree[0]], neval[0])
+            eta = np.linspace(
+                self.knotVect[1][self.degree[1]], self.knotVect[1][-self.degree[1]], neval[1])
+            
+            # Iso parameters for the elemnts
+            xiu = np.unique(self.knotVect[0])
+            etau = np.unique(self.knotVect[1])
 
-        phi1 = sps.kron(phi_eta1,  phi_xi1,  'csc')
-        phi2 = sps.kron(phi_eta2,  phi_xi2,  'csc')
+            # Basis functions
+            basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
+            basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
+                   
+            
+            phi_xi1 = basis_xi.N(xiu)
+            phi_eta1 = basis_eta.N(eta)
+        
+            phi_xi2 = basis_xi.N(xi)
+            phi_eta2 = basis_eta.N(etau)
         
 
-        xe1 = phi1.dot(Pxm)
-        ye1 = phi1.dot(Pym)
-        xe2 = phi2.dot(Pxm)
-        ye2 = phi2.dot(Pym)
+            phi1 = sps.kron(phi_eta1,  phi_xi1,  'csc')
+            phi2 = sps.kron(phi_eta2,  phi_xi2,  'csc')
+            
 
-        xe1 = xe1.reshape((xiu.size, neval[1]), order='F')
-        ye1 = ye1.reshape((xiu.size, neval[1]), order='F')
-        xe2 = xe2.reshape((neval[0], etau.size), order='F')
-        ye2 = ye2.reshape((neval[0], etau.size), order='F')
+            xe1 = phi1.dot(Pxm)
+            ye1 = phi1.dot(Pym)
+            xe2 = phi2.dot(Pxm)
+            ye2 = phi2.dot(Pym)
 
-        for i in range(xiu.size):
-            # loop on xi
-            # Getting one eta iso-curve
-            plt.plot(xe1[i, :], ye1[i, :], color=edgecolor,
-                     alpha=alpha, **kwargs)
+            xe1 = xe1.reshape((xiu.size, neval[1]), order='F')
+            ye1 = ye1.reshape((xiu.size, neval[1]), order='F')
+            xe2 = xe2.reshape((neval[0], etau.size), order='F')
+            ye2 = ye2.reshape((neval[0], etau.size), order='F')
 
-        for i in range(etau.size):
-            # loop on eta
-            # Getting one xi iso-curve
-            plt.plot(xe2[:, i], ye2[:, i], color=edgecolor,
-                     alpha=alpha, **kwargs)
-        plt.plot(Pxm, Pym, color=edgecolor,
-                 alpha=alpha, marker='o', linestyle='')
-        plt.axis('equal')
+            for i in range(xiu.size):
+                # loop on xi
+                # Getting one eta iso-curve
+                plt.plot(xe1[i, :], ye1[i, :], color=edgecolor,
+                        alpha=alpha, **kwargs)
+
+            for i in range(etau.size):
+                # loop on eta
+                # Getting one xi iso-curve
+                plt.plot(xe2[:, i], ye2[:, i], color=edgecolor,
+                        alpha=alpha, **kwargs)
+            plt.plot(Pxm, Pym, color=edgecolor,
+                    alpha=alpha, marker='o', linestyle='')
+            plt.axis('equal')
+            
 
     def DegreeElevation(self, new_degree):
         
@@ -591,13 +613,77 @@ class BSplinePatch(object):
 
         self.pgx = self.phi @ P[:, 0]
         self.pgy = self.phi @ P[:, 1]
- 
+
+
+    def DVCIntegration(self, n=None, G=False):
+        """Builds a homogeneous (and fast) integration scheme for DVC"""
+        if hasattr(n, 'rz') or n is None:
+            # if n is a camera then n is autocomputed
+            n = self.GetApproxElementSize(n)
+        if type(n) is not int:
+            n = int(n)
+        print('Nb quadrature in each direction = %d' % n)
+        self.wdetJ = np.array([])
+        col = np.array([], dtype=int)
+        row = np.array([], dtype=int)
+        val = np.array([])
+        if G:   # compute also the shape function gradients
+            valx = np.array([])
+            valy = np.array([])
+            valz = np.array([])
+        npg = 0
+        for je in self.e.keys():
+            colj, rowj, valj, valxj, valyj, valzj, wdetJj = self.__DVCIntegElem(
+                self.e[je], je, n, G=G
+                )
+            col = np.append(col, colj)
+            row = np.append(row, rowj + npg)
+            val = np.append(val, valj)
+            if G:
+                valx = np.append(valx, valxj)
+                valy = np.append(valy, valyj)
+                valz = np.append(valz, valzj)
+            self.wdetJ = np.append(self.wdetJ, wdetJj)
+            npg += len(wdetJj)
+        self.npg = len(self.wdetJ)
+        self.phix = sp.sparse.csr_matrix(
+            (val, (row, self.conn[col, 0])), shape=(self.npg, self.ndof))
+        self.phiy = sp.sparse.csr_matrix(
+            (val, (row, self.conn[col, 1])), shape=(self.npg, self.ndof))
+        self.phiz = sp.sparse.csr_matrix(
+            (val, (row, self.conn[col, 2])), shape=(self.npg, self.ndof))
+        if G:
+            self.dphixdx = sp.sparse.csr_matrix(
+                (valx, (row, self.conn[col, 0])), shape=(self.npg, self.ndof))
+            self.dphixdy = sp.sparse.csr_matrix(
+                (valy, (row, self.conn[col, 0])), shape=(self.npg, self.ndof))
+            self.dphixdz = sp.sparse.csr_matrix(
+                (valz, (row, self.conn[col, 0])), shape=(self.npg, self.ndof))
+            self.dphiydx = sp.sparse.csr_matrix(
+                (valx, (row, self.conn[col, 1])), shape=(self.npg, self.ndof))
+            self.dphiydy = sp.sparse.csr_matrix(
+                (valy, (row, self.conn[col, 1])), shape=(self.npg, self.ndof))
+            self.dphiydz = sp.sparse.csr_matrix(
+                (valz, (row, self.conn[col, 1])), shape=(self.npg, self.ndof))
+            self.dphizdx = sp.sparse.csr_matrix(
+                (valx, (row, self.conn[col, 2])), shape=(self.npg, self.ndof))
+            self.dphizdy = sp.sparse.csr_matrix(
+                (valy, (row, self.conn[col, 2])), shape=(self.npg, self.ndof))
+            self.dphizdz = sp.sparse.csr_matrix(
+                (valz, (row, self.conn[col, 2])), shape=(self.npg, self.ndof))
+        rep, = np.where(self.conn[:, 0] >= 0)
+        qx = np.zeros(self.ndof)
+        qx[self.conn[rep, :]] = self.n[rep, :]
+        self.pgx = self.phix.dot(qx)
+        self.pgy = self.phiy.dot(qx)
+        self.pgz = self.phiz.dot(qx)
+
+
     def ShapeFunctionsAtGridPoints(self, xi, eta, zeta=None):
         """ xi, eta (and zeta in 3D) are the 1d points 
         This method computes the basis functions on the mesh-grid point 
         obtained from the 1d vector points xi, eta (and zeta)
         """
-        param = np.array([xi, eta])
             
         basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
         basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
@@ -634,14 +720,63 @@ class BSplinePatch(object):
             basis_zeta = bs.BSplineBasis(self.degree[2], self.knotVect[2])
             phi_zeta = basis_zeta.N(zeta)
             dphi_zeta = basis_zeta.N(zeta, k=1)
-     
-        
+            
+            phi = sps.kron(phi_eta,  phi_xi, 'csc')   
+            phi = sps.kron(phi_zeta, phi, 'csc')   
+                  
+            dphidxi = sps.kron(phi_eta,  dphi_xi, 'csc')
+            dphidxi = sps.kron(phi_zeta, dphidxi, 'csc')
+            
+            dphideta = sps.kron(dphi_eta,  phi_xi, 'csc')
+            dphideta = sps.kron(phi_zeta, dphideta, 'csc')
+            
+            dphidzeta = sps.kron(phi_eta, phi_xi, 'csc')
+            dphidzeta = sps.kron(dphi_zeta, dphidzeta, 'csc')
+            
+            P = self.Get_P()
+            
+            dxdxi = dphidxi.dot(P[:, 0])
+            dxdeta = dphideta.dot(P[:, 0])
+            dxdzeta = dphidzeta.dot(P[:, 0])
+            
+            dydxi = dphidxi.dot(P[:, 1])
+            dydeta = dphideta.dot(P[:, 1])
+            dydzeta = dphidzeta.dot(P[:, 1])
+            
+            dzdxi = dphidxi.dot(P[:, 2])
+            dzdeta = dphideta.dot(P[:, 2])
+            dzdzeta = dphidzeta.dot(P[:, 2])            
+            
+            # Applying Sarrus Rules :
+            aei = dxdxi*dydeta*dzdzeta
+            dhc = dxdeta*dydzeta*dzdxi
+            bfg = dxdzeta*dydxi*dzdeta
+            gec = dxdzeta*dydeta*dzdxi
+            dbi = dxdeta*dydxi*dzdzeta
+            ahf = dxdxi*dydzeta*dzdeta
+            
+            detJ = aei + dhc + bfg - gec - dbi - ahf
+                      
+
+            
+            dphidx = sps.diags(dydeta/detJ).dot(dphidxi) + \
+                sps.diags(-dydxi/detJ).dot(dphideta)
+            dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
+                sps.diags(dxdxi/detJ).dot(dphideta)
+            
+            # Univariate basis functions if needed
+            # Nxi  = phi_xi
+            # Neta = phi_eta
+            N = phi
+            return N, dphidx, dphidy
+            
 
 
     def PlaneWave(self, T):
         V = np.zeros(self.ndof)
         V[self.conn[:, 0]] = np.cos(self.n[:, 1] / T * 2 * np.pi)
         return V       
+
 
 
 def Rectangle(roi, n_elems, degree):
@@ -711,15 +846,30 @@ def SplineFromROI(roi, dx, degree=np.array([2, 2])):
 
 
 
-
+# %% Test
 
 if __name__ == "__main__":
     
+    
+        
+    c, ctrlPts = bs.new_cylinder([0, 0, 0], [0, 0, 1], 1, 10)
+    degree = c.getDegrees()
+    
+    knotVect = c.getKnots()
+    
+    knots_to_add = [np.array([], dtype='float'), 
+                    np.array([0.5, 0.75], dtype='float'),
+                    np.array([0.5, 0.75], dtype='float')]
+    
+    m = BSplinePatch(ctrlPts, degree, knotVect)
+    m.Plot()
+    m.KnotInsertion(knots_to_add)
+    m.Plot()
+    m.DegreeElevation(np.array([2, 2, 2]))
+    # %% Vérif 2d
     f = px.Image('zoom-0053_1.tif').Load()
     # f.Plot()
     g = px.Image('zoom-0070_1.tif').Load()
-    
-    # %% Test ex 9    
     a = 0.925
     Xi = np.array([[0.5, 0.75, 1],
                 [0.5*a, 0.75*a, 1*a],
@@ -729,7 +879,7 @@ if __name__ == "__main__":
                 [0.5, 0.75, 1]])
 
     ctrlPts = np.array([Xi, Yi])
-    degree = np.array([2, 2])
+    degree = [2, 2]
     kv = np.array([0, 0, 0, 1, 1, 1])
     knotVect = [kv, kv]
 
@@ -740,46 +890,26 @@ if __name__ == "__main__":
     m = BSplinePatch(ctrlPts, degree, knotVect)
     m.Plot()
 
-    
+
     n = 500
 
 
     m.KnotInsertion([newt, newr])
     # m.DegreeElevation(np.array([3, 3]))
-    m.Plot()
+    #m.Plot()
 
     cam = px.Camera([100, 6.95, -5.35, 0])
-    #px.PlotMeshImage(f, m, cam)
+    px.PlotMeshImage(f, m, cam)
     u, v = cam.P(m.pgx, m.pgy)
-    # plt.plot(u, v, "y.")
-    # plt.show()
+    plt.plot(u, v, "y.")
+    plt.show()
+
     m.Connectivity()
     m.DICIntegration(cam)
-    # %% Next    
-    
     U = px.MultiscaleInit(f, g, m, cam, scales=[2, 1])
     U, res = px.Correlate(f, g, m, cam, U0=U)
 
     m.Plot(U, alpha=0.5)
     m.Plot(U=3*U)
-
-    px.PlotMeshImage(g, m, cam, U)
-
-    # %% Test 2
     
-    roi = np.array([[536, 54], [849, 481]])
-    m, cam = SplineFromROI(roi, dx=30, degree=[2, 2])
-    px.PlotMeshImage(f, m, cam)
-
-    m.Connectivity()
-    m.Plot()
-
-    m.DICIntegration(cam)
-
-    px.PlotMeshImage(f, m, cam)
-
-    U = px.MultiscaleInit(f, g, m, cam, scales=[3, 2, 1])
-    U, res = px.Correlate(f, g, m, cam, U0=U)
-
-    m.Plot(alpha=0.5)
-    m.Plot(U=3*U)
+    
