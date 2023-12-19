@@ -139,13 +139,13 @@ class BSplinePatch(object):
     def Get_P(self):
         """  Returns the total"""
         if self.dim == 2:
-            P = np.c_[self.ctrlPts[0].ravel(order='F'),
-                  self.ctrlPts[1].ravel(order='F')]
+            P = np.c_[self.ctrlPts[0].ravel(),
+                  self.ctrlPts[1].ravel()]
         
         elif self.dim == 3:
-            P = np.c_[self.ctrlPts[0].ravel(order='F'),
-                  self.ctrlPts[1].ravel(order='F'),
-                  self.ctrlPts[2].ravel(order='F')]
+            P = np.c_[self.ctrlPts[0].ravel(),
+                  self.ctrlPts[1].ravel(),
+                  self.ctrlPts[2].ravel()]
         return P
   
     def SelectNodes(self, n=-1):
@@ -233,13 +233,13 @@ class BSplinePatch(object):
             ctrlPts = self.ctrlPts.copy()
             
         if self.dim == 2:
-            n = np.c_[ctrlPts[0].ravel(order='F'),
-                  ctrlPts[1].ravel(order='F')]
+            n = np.c_[ctrlPts[0].ravel(),
+                  ctrlPts[1].ravel()]
         
         elif self.dim == 3:
-            n = np.c_[ctrlPts[0].ravel(order='F'),
-                  ctrlPts[1].ravel(order='F'),
-                  ctrlPts[2].ravel(order='F')]
+            n = np.c_[ctrlPts[0].ravel(),
+                  ctrlPts[1].ravel(),
+                  ctrlPts[2].ravel()]
         return n
     
     def N2CtrlPts(self, n=None):
@@ -248,13 +248,13 @@ class BSplinePatch(object):
             n = self.n.copy()
         if self.dim == 2 :
             nbf = self.Get_nbf_1d()
-            ctrlPts = np.array([n[:, 0].reshape(nbf, order='F'),
-                                n[:, 1].reshape(nbf, order='F')])
+            ctrlPts = np.array([n[:, 0].reshape(nbf),
+                                n[:, 1].reshape(nbf)])
         elif self.dim == 3:
             nbf = self.Get_nbf_1d()
-            ctrlPts = np.array([n[:, 0].reshape(nbf, order='F'),
-                                n[:, 1].reshape(nbf, order='F'),
-                                n[:, 2].reshape(nbf, order='F')])
+            ctrlPts = np.array([n[:, 0].reshape(nbf),
+                                n[:, 1].reshape(nbf),
+                                n[:, 2].reshape(nbf)])
             
         return ctrlPts
     
@@ -292,8 +292,8 @@ class BSplinePatch(object):
                       self.ctrlPts[1].ravel()]
         mfe.Connectivity()
         V = U.copy()
-        V[self.conn[:, 0]] = U[self.conn[:, 0]].reshape(nbf, order='F').ravel()
-        V[self.conn[:, 1]] = U[self.conn[:, 1]].reshape(nbf, order='F').ravel()
+        V[self.conn[:, 0]] = U[self.conn[:, 0]].reshape(nbf).ravel()
+        V[self.conn[:, 1]] = U[self.conn[:, 1]].reshape(nbf).ravel()
         mfe.VTKSol(filename+'_cp', V)
 
     def Plot(self, U=None, n=None, neval=None, **kwargs):
@@ -313,13 +313,20 @@ class BSplinePatch(object):
         U = U.reshape((self.dim, -1))    
             
         if self.dim == 3:
-        
-            fig = plt.figure()
-            ax = fig.add_subplot(projection="3d")
-            ax.scatter(*self.ctrlPts, color=edgecolor, alpha=alpha)
-            ax.set_xlabel('X Label')
-            ax.set_ylabel('Y Label')
-            plt.show()
+            try:
+                import k3d
+            except:
+                raise Exception("k3d is not installed")
+            spline = bs.BSpline(self.degree, self.knotVect)
+            ctrl_pts = self.ctrlPts
+            save = "/tmp/stl_mesh.stl"
+            mesh = make_stl_mesh(spline, ctrl_pts)
+            mesh.save(save)
+            with open(save, 'rb') as stl:
+                data = stl.read()
+            plot = k3d.plot()
+            plot += k3d.stl(data)
+            plot.display()
             
             
         elif self.dim == 2:    
@@ -336,30 +343,23 @@ class BSplinePatch(object):
             etau = np.unique(self.knotVect[1])
 
             # Basis functions
-            basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
-            basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
-                   
+            spline = bs.BSpline(self.degree, self.knotVect)
             
-            phi_xi1 = basis_xi.N(xiu)
-            phi_eta1 = basis_eta.N(eta)
-        
-            phi_xi2 = basis_xi.N(xi)
-            phi_eta2 = basis_eta.N(etau)
-        
-
-            phi1 = sps.kron(phi_eta1,  phi_xi1,  'csc')
-            phi2 = sps.kron(phi_eta2,  phi_xi2,  'csc')
             
-
+            phi1 = spline.DN([xiu, eta], k=[0, 0])
+            phi2 = spline.DN([xi, etau], k=[0, 0])
+            
+            #xe, ye1 = spline(self.ctrlPts)
             xe1 = phi1.dot(Pxm)
             ye1 = phi1.dot(Pym)
             xe2 = phi2.dot(Pxm)
             ye2 = phi2.dot(Pym)
-
-            xe1 = xe1.reshape((xiu.size, neval[1]), order='F')
-            ye1 = ye1.reshape((xiu.size, neval[1]), order='F')
-            xe2 = xe2.reshape((neval[0], etau.size), order='F')
-            ye2 = ye2.reshape((neval[0], etau.size), order='F')
+            
+            
+            xe1 = xe1.reshape((xiu.size, neval[1]))
+            ye1 = ye1.reshape((xiu.size, neval[1]))
+            xe2 = xe2.reshape((neval[0], etau.size))
+            ye2 = ye2.reshape((neval[0], etau.size))
 
             for i in range(xiu.size):
                 # loop on xi
@@ -390,7 +390,7 @@ class BSplinePatch(object):
     def KnotInsertion(self, knots):
         
         spline = bs.BSpline(self.degree, self.knotVect)
-        
+        # self.ctrlPts =  self.ctrlPts.transpose(0,2,1)
         self.ctrlPts = spline.knotInsertion(self.ctrlPts, knots)
         self.knotVect = spline.getKnots()
         self.n = self.CtrlPts2N()
@@ -568,16 +568,9 @@ class BSplinePatch(object):
             mes_xi     # Aranged gauss points in  xi direction
         # Aranged gauss points in  eta direction
         eta = eta_min + 0.5*(eta_g+1)*mes_eta
-
-        basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
-        basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
-
-        phi_xi, dphi_xi = basis_xi.N(xi), basis_xi.N(xi, k=1)
-        phi_eta, dphi_eta = basis_eta.N(eta), basis_eta.N(eta, k=1)
-
-        phi = sps.kron(phi_eta,  phi_xi,  'csc')
-        dphidxi = sps.kron(phi_eta,  dphi_xi,  'csc')
-        dphideta = sps.kron(dphi_eta,  phi_xi,  'csc')
+        
+    
+        phi, dphidx, dphidy, detJ = self.ShapeFunctionsAtGridPoints(xi, eta)
         self.npg = phi.shape[0]
 
         wg_xi = np.kron(np.ones(ne_xi), Weight_xi)
@@ -587,18 +580,7 @@ class BSplinePatch(object):
         mes_eta = np.kron(mes_eta, np.ones(xi.shape[0]))
 
         P = self.Get_P()
-
-        """ Jacobian elements"""
-        dxdxi = dphidxi.dot(P[:, 0])
-        dxdeta = dphideta.dot(P[:, 0])
-        dydxi = dphidxi.dot(P[:, 1])
-        dydeta = dphideta.dot(P[:, 1])
-        detJ = dxdxi*dydeta - dydxi*dxdeta
-        """ Spatial derivatives """
-        dphidx = sps.diags(dydeta/detJ).dot(dphidxi) + \
-            sps.diags(-dydxi/detJ).dot(dphideta)
-        dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
-            sps.diags(dxdxi/detJ).dot(dphideta)
+        
         """ Integration weights + measures + Jacobian of the transformation """
         self.wdetJ = np.kron(wg_eta, wg_xi)*np.abs(detJ)*mes_xi*mes_eta/4
 
@@ -679,23 +661,21 @@ class BSplinePatch(object):
         self.pgz = self.phiz.dot(qx)
 
 
-    def ShapeFunctionsAtGridPoints(self, xi, eta, zeta=None):
+    def ShapeFunctionsAtGridPoints(self, xi, eta, zeta=None, returnDetJ=True):
         """ xi, eta (and zeta in 3D) are the 1d points 
         This method computes the basis functions on the mesh-grid point 
         obtained from the 1d vector points xi, eta (and zeta)
         """
             
-        basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
-        basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
         
-        phi_xi, dphi_xi = basis_xi.N(xi), basis_xi.N(xi, k=1)
-        phi_eta, dphi_eta = basis_eta.N(eta), basis_eta.N(eta, k=1)
+        spline = bs.BSpline(self.degree, self.knotVect)
                        
         if self.dim == 2:    
             
-            phi = sps.kron(phi_eta,  phi_xi, 'csc')            
-            dphidxi = sps.kron(phi_eta,  dphi_xi, 'csc')
-            dphideta = sps.kron(dphi_eta,  phi_xi, 'csc')
+            phi = spline.DN([xi, eta], k=[0, 0])
+                     
+            dphidxi = spline.DN([xi, eta], k=[1, 0])
+            dphideta = spline.DN([xi, eta], k=[0, 1])
             
             
             P = self.Get_P()
@@ -704,16 +684,22 @@ class BSplinePatch(object):
             dxdeta = dphideta.dot(P[:, 0])
             dydxi = dphidxi.dot(P[:, 1])
             dydeta = dphideta.dot(P[:, 1])
+            
+            
             detJ = dxdxi*dydeta - dydxi*dxdeta
+            
             dphidx = sps.diags(dydeta/detJ).dot(dphidxi) + \
                 sps.diags(-dydxi/detJ).dot(dphideta)
             dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
                 sps.diags(dxdxi/detJ).dot(dphideta)
+            
             # Univariate basis functions if needed
             # Nxi  = phi_xi
             # Neta = phi_eta
-            N = phi
-            return N, dphidx, dphidy
+            if returnDetJ == True:
+                return phi, dphidx, dphidy, detJ
+            else :
+                return phi, dphidx, dphidy
         
         elif self.dim == 3 :
             
@@ -844,44 +830,58 @@ def SplineFromROI(roi, dx, degree=np.array([2, 2])):
     cam = Camera(p)
     return m, cam
 
-
+def make_stl_mesh(spline, ctrl_pts, n_eval_per_elem=10, remove_empty_areas=True):
+    
+    try:
+        from stl import mesh
+    except:
+        raise Exception("stl is not installed")
+    tri = []
+    XI = spline.linspace(n_eval_per_elem=n_eval_per_elem)
+    shape = [xi.size for xi in XI]
+    for axis in range(3):
+        XI_axis = [xi for xi in XI]
+        shape_axis = [shape[i] for i in range(len(shape)) if i!=axis]
+        XI_axis[axis] = np.zeros(1)
+        pts_l = spline(ctrl_pts, tuple(XI_axis), [0, 0, 0]).reshape([3] + shape_axis)
+        XI_axis[axis] = np.ones(1)
+        pts_r = spline(ctrl_pts, tuple(XI_axis), [0, 0, 0]).reshape([3] + shape_axis)
+        for pts in [pts_l, pts_r]:
+            A = pts[:,  :-1,  :-1].reshape((3, -1)).T[:, None, :]
+            B = pts[:,  :-1, 1:  ].reshape((3, -1)).T[:, None, :]
+            C = pts[:, 1:  ,  :-1].reshape((3, -1)).T[:, None, :]
+            D = pts[:, 1:  , 1:  ].reshape((3, -1)).T[:, None, :]
+            tri1 = np.concatenate((A, B, C), axis=1)
+            tri2 = np.concatenate((D, C, B), axis=1)
+            tri.append(np.concatenate((tri1, tri2), axis=0))
+    tri = np.concatenate(tri, axis=0)
+    data = np.empty(tri.shape[0], dtype=mesh.Mesh.dtype)
+    data['vectors'] = tri
+    m = mesh.Mesh(data, remove_empty_areas=remove_empty_areas)
+    return m
 
 # %% Test
 
 if __name__ == "__main__":
     
-    
-        
-    c, ctrlPts = bs.new_cylinder([0, 0, 0], [0, 0, 1], 1, 10)
-    degree = c.getDegrees()
-    
-    knotVect = c.getKnots()
-    
-    knots_to_add = [np.array([], dtype='float'), 
-                    np.array([0.5, 0.75], dtype='float'),
-                    np.array([0.5, 0.75], dtype='float')]
-    
-    m = BSplinePatch(ctrlPts, degree, knotVect)
-    m.Plot()
-    m.KnotInsertion(knots_to_add)
-    m.Plot()
-    m.DegreeElevation(np.array([2, 2, 2]))
-    # %% Vérif 2d
+
     f = px.Image('zoom-0053_1.tif').Load()
     # f.Plot()
     g = px.Image('zoom-0070_1.tif').Load()
-    a = 0.925
-    Xi = np.array([[0.5, 0.75, 1],
-                [0.5*a, 0.75*a, 1*a],
-                [0, 0, 0]])
-    Yi = np.array([[0, 0, 0],
-                [0.5*a, 0.75*a, 1*a],
-                [0.5, 0.75, 1]])
 
-    ctrlPts = np.array([Xi, Yi])
-    degree = [2, 2]
-    kv = np.array([0, 0, 0, 1, 1, 1])
-    knotVect = [kv, kv]
+    a = 0.925
+    Xi = np.array([[0.5,  1],
+                [0.5*a,  1*a],
+                [0, 0]])
+    Yi = np.array([[0, 0],
+                [0.5*a,  1*a],
+                [0.5, 1]])
+
+    ctrlPts = np.array([Xi.T, Yi.T])
+    degree = [1, 2]
+    kv1 = np.array([0, 0,  1, 1])
+    kv2 = np.array([0, 0, 0, 1, 1, 1])
+    knotVect = [kv1, kv2]
 
     n = 5
     newr = np.linspace(0, 1, n+2)[1:-1]
@@ -891,10 +891,7 @@ if __name__ == "__main__":
     m.Plot()
 
 
-    n = 500
-
-
-    m.KnotInsertion([newt, newr])
+    m.KnotInsertion([newr, np.empty(0)])
     # m.DegreeElevation(np.array([3, 3]))
     #m.Plot()
 
@@ -911,5 +908,5 @@ if __name__ == "__main__":
 
     m.Plot(U, alpha=0.5)
     m.Plot(U=3*U)
-    
-    
+
+
