@@ -9,3 +9,8 @@ Afin de pouvoir utiliser ces codes, il est nécessaire d'avoir installé :
 * Matplotlib
 * Pyxel (voir lien ci dessus)
 * bsplyne (demander accès à Dorian)
+
+Pour des représentation 3D des B-splines, il est nécessaire d'installer :
+
+* numpy-stl
+* k3d
