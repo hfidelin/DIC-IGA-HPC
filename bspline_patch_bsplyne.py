@@ -324,8 +324,19 @@ class BSplinePatch(object):
             mesh.save(save)
             with open(save, 'rb') as stl:
                 data = stl.read()
+            
+            x = self.ctrlPts[0].ravel()
+            y = self.ctrlPts[1].ravel()
+            z = self.ctrlPts[2].ravel()
+            
+            plt_points = k3d.points(positions=np.array([x, y, z]).T,
+                                    point_size = 0.2,
+                                    shader='3d',
+                                    color=0x3f6bc5)
+            
             plot = k3d.plot()
             plot += k3d.stl(data)
+            plot += plt_points
             plot.display()
             
             
@@ -453,9 +464,7 @@ class BSplinePatch(object):
         xi_g = np.kron(np.ones(ne_xi), Gauss_xi[0])
         eta_g = np.kron(np.ones(ne_eta), Gauss_eta[0])
 
-        basis_xi = bs.BSplineBasis(self.degree[0], self.knotVect[0])
-        basis_eta = bs.BSplineBasis(self.degree[1], self.knotVect[1])
-
+        
         """ Measures of elements """
         mes_xi = e_xi[1:] - e_xi[:-1]
         mes_eta = e_eta[1:] - e_eta[:-1]
@@ -464,18 +473,11 @@ class BSplinePatch(object):
         mes_eta = np.kron(mes_eta, np.ones(nbg_eta))
 
         """ Going from the reference element to the parametric space  """
-        xi = xi_min + 0.5*(xi_g+1) * \
-            mes_xi     # Aranged gauss points in  xi direction
+        # Aranged gauss points in  xi direction
+        xi = xi_min + 0.5 * (xi_g + 1) * mes_xi     
         # Aranged gauss points in  eta direction
-        eta = eta_min + 0.5*(eta_g+1)*mes_eta
+        eta = eta_min + 0.5 * (eta_g + 1) * mes_eta
 
-        phi_xi, dphi_xi = basis_xi.N(xi), basis_xi.N(xi, k=1)
-        phi_eta, dphi_eta = basis_eta.N(eta), basis_eta.N(eta, k=1)
-
-        phi = sps.kron(phi_eta,  phi_xi,  'csc')
-        dphidxi = sps.kron(phi_eta,  dphi_xi,  'csc')
-        dphideta = sps.kron(dphi_eta,  phi_xi,  'csc')
-        self.npg = phi.shape[0]
 
         wg_xi = np.kron(np.ones(ne_xi), Gauss_xi[1])
         wg_eta = np.kron(np.ones(ne_eta), Gauss_eta[1])
@@ -486,17 +488,11 @@ class BSplinePatch(object):
         if P is None:
             P = self.Get_P()
 
-        """ Jacobian elements"""
-        dxdxi = dphidxi.dot(P[:, 0])
-        dxdeta = dphideta.dot(P[:, 0])
-        dydxi = dphidxi.dot(P[:, 1])
-        dydeta = dphideta.dot(P[:, 1])
-        detJ = dxdxi*dydeta - dydxi*dxdeta
         """ Spatial derivatives """
-        dphidx = sps.diags(dydeta/detJ).dot(dphidxi) + \
-            sps.diags(-dydxi/detJ).dot(dphideta)
-        dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
-            sps.diags(dxdxi/detJ).dot(dphideta)
+        
+        phi, dphidx, dphidy, detJ = self.ShapeFunctionsAtGridPoints(xi, eta)
+        self.npg = phi.shape[0]
+        
         """ Integration weights + measures + Jacobian of the transformation """
         self.wdetJ = np.kron(wg_eta, wg_xi)*np.abs(detJ)*mes_xi*mes_eta/4
         zero = sps.csr_matrix((self.npg, nbf))
@@ -661,7 +657,7 @@ class BSplinePatch(object):
         self.pgz = self.phiz.dot(qx)
 
 
-    def ShapeFunctionsAtGridPoints(self, xi, eta, zeta=None, returnDetJ=True):
+    def ShapeFunctionsAtGridPoints(self, xi, eta, zeta=None):
         """ xi, eta (and zeta in 3D) are the 1d points 
         This method computes the basis functions on the mesh-grid point 
         obtained from the 1d vector points xi, eta (and zeta)
@@ -693,31 +689,16 @@ class BSplinePatch(object):
             dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
                 sps.diags(dxdxi/detJ).dot(dphideta)
             
-            # Univariate basis functions if needed
-            # Nxi  = phi_xi
-            # Neta = phi_eta
-            if returnDetJ == True:
-                return phi, dphidx, dphidy, detJ
-            else :
-                return phi, dphidx, dphidy
+            return phi, dphidx, dphidy, detJ
+            
         
         elif self.dim == 3 :
             
-            basis_zeta = bs.BSplineBasis(self.degree[2], self.knotVect[2])
-            phi_zeta = basis_zeta.N(zeta)
-            dphi_zeta = basis_zeta.N(zeta, k=1)
-            
-            phi = sps.kron(phi_eta,  phi_xi, 'csc')   
-            phi = sps.kron(phi_zeta, phi, 'csc')   
-                  
-            dphidxi = sps.kron(phi_eta,  dphi_xi, 'csc')
-            dphidxi = sps.kron(phi_zeta, dphidxi, 'csc')
-            
-            dphideta = sps.kron(dphi_eta,  phi_xi, 'csc')
-            dphideta = sps.kron(phi_zeta, dphideta, 'csc')
-            
-            dphidzeta = sps.kron(phi_eta, phi_xi, 'csc')
-            dphidzeta = sps.kron(dphi_zeta, dphidzeta, 'csc')
+            phi = spline.DN([xi, eta, zeta], k=[0, 0, 0])
+                   
+            dphidxi = spline.DN([xi, eta, zeta], k=[1, 0, 0]).tocsc()
+            dphideta = spline.DN([xi, eta, zeta], k=[0, 1, 0]).tocsc()
+            dphidzeta = spline.DN([xi, eta, zeta], k=[0, 0, 1]).tocsc()
             
             P = self.Get_P()
             
@@ -743,19 +724,39 @@ class BSplinePatch(object):
             
             detJ = aei + dhc + bfg - gec - dbi - ahf
                       
+            # Computing comatrix of J
+            
+            ComJ_11 = dydeta * dzdzeta - dzdeta * dydzeta
+            ComJ_21 = - (dxdeta * dzdzeta - dzdeta * dxdzeta)
+            ComJ_31 = dxdeta * dzdzeta - dydeta * dxdzeta
+            
+            ComJ_12 = -(dydxi * dzdzeta - dzdxi * dydzeta)
+            ComJ_22 = dxdxi * dzdzeta - dzdxi * dxdzeta
+            ComJ_32 = -(dxdxi * dydzeta - dydxi * dxdzeta)
+            
+            ComJ_13 = dydxi * dzdeta - dzdxi * dydeta
+            ComJ_23 = -(dxdxi * dzdeta - dzdxi * dxdeta)
+            ComJ_33 = dxdxi * dydeta - dydxi * dzdeta
+            
+            ComJ = np.array([[ComJ_11, ComJ_12, ComJ_13],
+                             [ComJ_21, ComJ_22, ComJ_23],
+                             [ComJ_31, ComJ_32, ComJ_33]])
 
+            # Transposing the comatrix
+            tComJ = ComJ.T
             
-            dphidx = sps.diags(dydeta/detJ).dot(dphidxi) + \
-                sps.diags(-dydxi/detJ).dot(dphideta)
-            dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
-                sps.diags(dxdxi/detJ).dot(dphideta)
-            
-            # Univariate basis functions if needed
-            # Nxi  = phi_xi
-            # Neta = phi_eta
-            N = phi
-            return N, dphidx, dphidy
-            
+            dphidx = sps.diags(tComJ[0, 0]/detJ).dot(dphidxi) + \
+                sps.diags(tComJ[1, 0]/detJ).dot(dphideta) + \
+                sps.diags(tComJ[2, 0]/detJ).dot(dphidzeta)
+            dphidy = sps.diags(tComJ[0, 1]/detJ).dot(dphidxi) + \
+                sps.diags(tComJ[1, 1]/detJ).dot(dphideta) + \
+                sps.diags(tComJ[2, 1]/detJ).dot(dphidzeta)
+            dphidz = sps.diags(tComJ[0, 2]/detJ).dot(dphidxi) + \
+                sps.diags(tComJ[1, 2]/detJ).dot(dphideta) + \
+                sps.diags(tComJ[2, 2]/detJ).dot(dphidzeta)  
+                              
+            return phi, dphidx, dphidy, dphidz, detJ
+              
 
 
     def PlaneWave(self, T):
@@ -870,16 +871,16 @@ if __name__ == "__main__":
     g = px.Image('zoom-0070_1.tif').Load()
 
     a = 0.925
-    Xi = np.array([[0.5,  1],
-                [0.5*a,  1*a],
-                [0, 0]])
-    Yi = np.array([[0, 0],
-                [0.5*a,  1*a],
-                [0.5, 1]])
+    Xi = np.array([[0.5, 0.75, 1],
+                [0.5*a, 0.75*a, 1*a],
+                [0,0, 0]])
+    Yi = np.array([[0, 0, 0],
+                [0.5*a, 0.75*a, 1*a],
+                [0.5, 0.75, 1]])
 
     ctrlPts = np.array([Xi.T, Yi.T])
-    degree = [1, 2]
-    kv1 = np.array([0, 0,  1, 1])
+    degree = [2, 2]
+    kv1 = np.array([0, 0, 0, 1, 1, 1])
     kv2 = np.array([0, 0, 0, 1, 1, 1])
     knotVect = [kv1, kv2]
 
@@ -891,18 +892,21 @@ if __name__ == "__main__":
     m.Plot()
 
 
-    m.KnotInsertion([newr, np.empty(0)])
+    m.KnotInsertion([newr, newt])
     # m.DegreeElevation(np.array([3, 3]))
     #m.Plot()
 
     cam = px.Camera([100, 6.95, -5.35, 0])
-    px.PlotMeshImage(f, m, cam)
-    u, v = cam.P(m.pgx, m.pgy)
-    plt.plot(u, v, "y.")
-    plt.show()
 
     m.Connectivity()
-    m.DICIntegration(cam)
+    # %% gauss
+    m.GaussIntegration()
+    
+    
+    
+    
+    # %% Pas gauss
+    # m.DICIntegration(cam)
     U = px.MultiscaleInit(f, g, m, cam, scales=[2, 1])
     U, res = px.Correlate(f, g, m, cam, U0=U)
 
