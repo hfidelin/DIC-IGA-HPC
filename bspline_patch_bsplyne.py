@@ -700,6 +700,10 @@ class BSplinePatch(object):
             dphideta = spline.DN([xi, eta, zeta], k=[0, 1, 0]).tocsc()
             dphidzeta = spline.DN([xi, eta, zeta], k=[0, 0, 1]).tocsc()
             
+            print(spline.getDegrees())
+            print(spline.getKnots())
+            test = dphidxi.A[:, 0].reshape((5, 5, 5))
+            print(test)
             P = self.Get_P()
             
             dxdxi = dphidxi.dot(P[:, 0])
@@ -738,22 +742,16 @@ class BSplinePatch(object):
             ComJ_23 = -(dxdxi * dzdeta - dzdxi * dxdeta)
             ComJ_33 = dxdxi * dydeta - dydxi * dzdeta
             
-            ComJ = np.array([[ComJ_11, ComJ_12, ComJ_13],
-                             [ComJ_21, ComJ_22, ComJ_23],
-                             [ComJ_31, ComJ_32, ComJ_33]])
 
-            # Transposing the comatrix
-            tComJ = ComJ.T
-            
-            dphidx = sps.diags(tComJ[0, 0]/detJ).dot(dphidxi) + \
-                sps.diags(tComJ[1, 0]/detJ).dot(dphideta) + \
-                sps.diags(tComJ[2, 0]/detJ).dot(dphidzeta)
-            dphidy = sps.diags(tComJ[0, 1]/detJ).dot(dphidxi) + \
-                sps.diags(tComJ[1, 1]/detJ).dot(dphideta) + \
-                sps.diags(tComJ[2, 1]/detJ).dot(dphidzeta)
-            dphidz = sps.diags(tComJ[0, 2]/detJ).dot(dphidxi) + \
-                sps.diags(tComJ[1, 2]/detJ).dot(dphideta) + \
-                sps.diags(tComJ[2, 2]/detJ).dot(dphidzeta)  
+            dphidx = sps.diags(ComJ_11/detJ).dot(dphidxi) + \
+                sps.diags(ComJ_12/detJ).dot(dphideta) + \
+                sps.diags(ComJ_13/detJ).dot(dphidzeta)
+            dphidy = sps.diags(ComJ_21/detJ).dot(dphidxi) + \
+                sps.diags(ComJ_22/detJ).dot(dphideta) + \
+                sps.diags(ComJ_23/detJ).dot(dphidzeta)
+            dphidz = sps.diags(ComJ_31/detJ).dot(dphidxi) + \
+                sps.diags(ComJ_32/detJ).dot(dphideta) + \
+                sps.diags(ComJ_33/detJ).dot(dphidzeta)  
                               
             return phi, dphidx, dphidy, dphidz, detJ
               
