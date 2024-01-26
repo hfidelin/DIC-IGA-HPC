@@ -34,6 +34,7 @@ class BSplinePatch(object):
         self.n = self.CtrlPts2N()
         self.degree = np.array(degree)
         self.knotVect = knotVect
+        self.spline = bs.BSpline(self.degree, self.knotVect)
 
         self.ien = 0              # NURBS Connectivity p-uplet (IENu,IENv)
         # Connectivity: Control Point number (column) of each element (line)
@@ -263,7 +264,7 @@ class BSplinePatch(object):
                          self.knotVect[0][-self.degree[0]], n[0])
         eta = np.linspace(self.knotVect[1][self.degree[1]],
                           self.knotVect[1][-self.degree[1]], n[1])
-        phi, _, _ = self.ShapeFunctionsAtGridPoints(xi, eta)
+        phi, _, _ = self.ShapeFunctions(xi, eta)
         
         x = phi.dot(self.n[:, 0])
         y = phi.dot(self.n[:, 1])
@@ -333,6 +334,8 @@ class BSplinePatch(object):
                                     point_size = 0.2,
                                     shader='3d',
                                     color=0x3f6bc5)
+            
+           
             
             plot = k3d.plot()
             plot += k3d.stl(data)
@@ -485,12 +488,14 @@ class BSplinePatch(object):
         mes_xi = np.kron(np.ones(eta.shape[0]), mes_xi)
         mes_eta = np.kron(mes_eta, np.ones(xi.shape[0]))
 
+        
+
         if P is None:
             P = self.Get_P()
 
         """ Spatial derivatives """
         
-        phi, dphidx, dphidy, detJ = self.ShapeFunctionsAtGridPoints(xi, eta)
+        phi, dphidx, dphidy, detJ = self.ShapeFunctions(xi, eta, P=P)
         self.npg = phi.shape[0]
         
         """ Integration weights + measures + Jacobian of the transformation """
@@ -504,6 +509,9 @@ class BSplinePatch(object):
         self.dphiydx = sps.hstack((zero, dphidx),  'csc')
         self.dphiydy = sps.hstack((zero, dphidy),  'csc')
         
+        self.pgx = self.phi @ P[:, 0]
+        self.pgy = self.phi @ P[:, 1]  
+        
         
     def GetApproxElementSize(self, cam=None):
         if cam is None:
@@ -515,6 +523,7 @@ class BSplinePatch(object):
         else:
             # in pyxel unit (int)
             u, v = cam.P(self.n[:, 0], self.n[:, 1])
+            
             m2 = self.Copy()
             m2.GaussIntegration(npg=[1, 1], P=np.c_[u, v])
             n = int(np.floor(np.max(np.sqrt(m2.wdetJ))))
@@ -532,54 +541,67 @@ class BSplinePatch(object):
             n = self.GetApproxElementSize(n)
         if type(n) == int:
             n = np.array([n, n], dtype=int)
+        
         n = np.maximum(self.degree + 1, n)
+        
+        # Nombre de point d'intégration par élément
         nbg_xi = n[0]
         nbg_eta = n[1]
-
-        Rect_xi = np.linspace(-1, 1, nbg_xi)
-        Weight_xi = 2/n[0] * np.ones(nbg_xi)
-        Rect_eta = np.linspace(-1, 1, nbg_eta)
-        Weight_eta = 2/n[1] * np.ones(nbg_eta)
-
+        
+        """Espace de référence [-1,1]"""
+        pxi = 1.0 / nbg_xi
+        peta = 1.0 / nbg_eta
+        Rect_xi = np.linspace(-1+pxi, 1-pxi, nbg_xi)
+        Rect_eta = np.linspace(-1+peta, 1-peta, nbg_eta)
+        
+        
         nbf = self.Get_nbf()
-
+        
+        """
+        On met en place le mapping de [-1,1] à [xi_i, xi_i+1] un élément
+        de l'espace paramétrique
+        """
+        
+        # Array des éléments uniques du vecteur de neud
         e_xi = np.unique(self.knotVect[0])
-        ne_xi = e_xi.shape[0]-1
         e_eta = np.unique(self.knotVect[1])
+        
+        # Nombre d'élément
+        ne_xi = e_xi.shape[0]-1
         ne_eta = e_eta.shape[0]-1
+        
+        # Pour tout éléments, on calcule leur borne inférieur xi_i / eta_i
         xi_min = np.kron(e_xi[:-1], np.ones(nbg_xi))
+        xi_max = np.kron(e_xi[1:], np.ones(nbg_xi))
+        
+        # Pour tout éléments on calcule leur borne supérieur xi_i+1 / eta_i+1
         eta_min = np.kron(e_eta[:-1], np.ones(nbg_eta))
+        eta_max = np.kron(e_eta[1:], np.ones(nbg_eta))
+        
+        # On initialise le vecteur contenant les points d'intégration pour
+        # chaque élément
         xi_g = np.kron(np.ones(ne_xi), Rect_xi)
         eta_g = np.kron(np.ones(ne_eta), Rect_eta)
-
-        """ Measures of elements """
-        mes_xi = e_xi[1:] - e_xi[:-1]
-        mes_eta = e_eta[1:] - e_eta[:-1]
-
-        mes_xi = np.kron(mes_xi, np.ones(nbg_xi))
-        mes_eta = np.kron(mes_eta, np.ones(nbg_eta))
-
-        """ Going from the reference element to the parametric space  """
-        xi = xi_min + 0.5*(xi_g+1) * \
-            mes_xi     # Aranged gauss points in  xi direction
-        # Aranged gauss points in  eta direction
-        eta = eta_min + 0.5*(eta_g+1)*mes_eta
         
-    
-        phi, dphidx, dphidy, detJ = self.ShapeFunctionsAtGridPoints(xi, eta)
+
+        """ Passage de l'élément de référence à l'espace paramétrique """
+        # Mapping des xi
+        xi = 0.5 * (xi_min + xi_max) + 0.5 * (xi_max - xi_min) * xi_g
+        
+        # Mapping des eta
+        eta = 0.5 * (eta_min + eta_max) + 0.5 * (eta_max - eta_min) * eta_g
+                
+        """
+        Calcul des matrices contenant les fonctions de formes évaluée aux 
+        points d'intégrations
+        """
+        phi, dphidx, dphidy, detJ = self.ShapeFunctions(xi, eta)
         self.npg = phi.shape[0]
-
-        wg_xi = np.kron(np.ones(ne_xi), Weight_xi)
-        wg_eta = np.kron(np.ones(ne_eta), Weight_eta)
-
-        mes_xi = np.kron(np.ones(eta.shape[0]), mes_xi)
-        mes_eta = np.kron(mes_eta, np.ones(xi.shape[0]))
-
+        
         P = self.Get_P()
         
-        """ Integration weights + measures + Jacobian of the transformation """
-        self.wdetJ = np.kron(wg_eta, wg_xi)*np.abs(detJ)*mes_xi*mes_eta/4
-
+        self.wdetJ = np.ones_like(detJ)
+        
         zero = sps.csr_matrix((self.npg, nbf))
         self.phi = phi
         self.phix = sps.hstack((phi, zero),  'csc')
@@ -593,71 +615,132 @@ class BSplinePatch(object):
         self.pgy = self.phi @ P[:, 1]
 
 
-    def DVCIntegration(self, n=None, G=False):
-        """Builds a homogeneous (and fast) integration scheme for DVC"""
-        if hasattr(n, 'rz') or n is None:
+    def DIntegration(self, n=100):
+        
+        if type(n) == int:
+            n = np.array([n, n], dtype=int)
+        
+        n = np.maximum(self.degree + 1, n)
+        
+        # Nombre de point d'intégration par élément
+        nbg_xi = n[0]
+        nbg_eta = n[1]
+        
+        """Espace de référence [-1,1]"""
+        pxi = 1.0 / nbg_xi
+        peta = 1.0 / nbg_eta
+        xi_g = np.linspace(pxi, 1-pxi, nbg_xi)
+        eta_g = np.linspace(peta, 1-peta, nbg_eta)
+        
+        nbf = self.Get_nbf()
+        
+        """
+        Calcul des matrices contenant les fonctions de formes évaluée aux 
+        points d'intégrations
+        """
+        phi, _, _, detJ = self.ShapeFunctions(xi_g, eta_g)
+        self.npg = phi.shape[0]
+        
+        P = self.Get_P()
+        
+        self.wdetJ = np.ones_like(detJ)
+        
+        zero = sps.csr_matrix((self.npg, nbf))
+        self.phi = phi
+        self.phix = sps.hstack((phi, zero),  'csc')
+        self.phiy = sps.hstack((zero, phi),  'csc')
+        
+
+        self.pgx = self.phi @ P[:, 0]
+        self.pgy = self.phi @ P[:, 1]
+
+
+
+    def DVC_Integration(self, n=None, G=False):
+        """ DVC integration: build of the global differential operators """
+        if hasattr(n, 'rz'):
             # if n is a camera then n is autocomputed
             n = self.GetApproxElementSize(n)
-        if type(n) is not int:
-            n = int(n)
-        print('Nb quadrature in each direction = %d' % n)
-        self.wdetJ = np.array([])
-        col = np.array([], dtype=int)
-        row = np.array([], dtype=int)
-        val = np.array([])
-        if G:   # compute also the shape function gradients
-            valx = np.array([])
-            valy = np.array([])
-            valz = np.array([])
-        npg = 0
-        for je in self.e.keys():
-            colj, rowj, valj, valxj, valyj, valzj, wdetJj = self.__DVCIntegElem(
-                self.e[je], je, n, G=G
-                )
-            col = np.append(col, colj)
-            row = np.append(row, rowj + npg)
-            val = np.append(val, valj)
-            if G:
-                valx = np.append(valx, valxj)
-                valy = np.append(valy, valyj)
-                valz = np.append(valz, valzj)
-            self.wdetJ = np.append(self.wdetJ, wdetJj)
-            npg += len(wdetJj)
-        self.npg = len(self.wdetJ)
-        self.phix = sp.sparse.csr_matrix(
-            (val, (row, self.conn[col, 0])), shape=(self.npg, self.ndof))
-        self.phiy = sp.sparse.csr_matrix(
-            (val, (row, self.conn[col, 1])), shape=(self.npg, self.ndof))
-        self.phiz = sp.sparse.csr_matrix(
-            (val, (row, self.conn[col, 2])), shape=(self.npg, self.ndof))
-        if G:
-            self.dphixdx = sp.sparse.csr_matrix(
-                (valx, (row, self.conn[col, 0])), shape=(self.npg, self.ndof))
-            self.dphixdy = sp.sparse.csr_matrix(
-                (valy, (row, self.conn[col, 0])), shape=(self.npg, self.ndof))
-            self.dphixdz = sp.sparse.csr_matrix(
-                (valz, (row, self.conn[col, 0])), shape=(self.npg, self.ndof))
-            self.dphiydx = sp.sparse.csr_matrix(
-                (valx, (row, self.conn[col, 1])), shape=(self.npg, self.ndof))
-            self.dphiydy = sp.sparse.csr_matrix(
-                (valy, (row, self.conn[col, 1])), shape=(self.npg, self.ndof))
-            self.dphiydz = sp.sparse.csr_matrix(
-                (valz, (row, self.conn[col, 1])), shape=(self.npg, self.ndof))
-            self.dphizdx = sp.sparse.csr_matrix(
-                (valx, (row, self.conn[col, 2])), shape=(self.npg, self.ndof))
-            self.dphizdy = sp.sparse.csr_matrix(
-                (valy, (row, self.conn[col, 2])), shape=(self.npg, self.ndof))
-            self.dphizdz = sp.sparse.csr_matrix(
-                (valz, (row, self.conn[col, 2])), shape=(self.npg, self.ndof))
-        rep, = np.where(self.conn[:, 0] >= 0)
-        qx = np.zeros(self.ndof)
-        qx[self.conn[rep, :]] = self.n[rep, :]
-        self.pgx = self.phix.dot(qx)
-        self.pgy = self.phiy.dot(qx)
-        self.pgz = self.phiz.dot(qx)
+        if type(n) == int:
+            n = np.array([n, n, n], dtype=int)
+        
+        n = np.maximum(self.degree + 1, n)
+        nbg_xi = n[0]
+        nbg_eta = n[1]
+        nbg_zeta = n[2]
+
+        # Computing reference spaces and weights
+        Rect_xi = np.linspace(-1, 1, nbg_xi)
+        Rect_eta = np.linspace(-1, 1, nbg_eta)
+        Rect_zeta = np.linspace(-1, 1, nbg_zeta)
+        
+        nbf = self.Get_nbf()
+        
+
+        e_xi = np.unique(self.knotVect[0])
+        ne_xi = e_xi.shape[0]-1
+        e_eta = np.unique(self.knotVect[1])
+        ne_eta = e_eta.shape[0]-1
+        e_zeta = np.unique(self.knotVect[2])
+        ne_zeta = e_zeta.shape[0]-1
+        
+        
+        xi_min = np.kron(e_xi[:-1], np.ones(nbg_xi))
+        eta_min = np.kron(e_eta[:-1], np.ones(nbg_eta))
+        zeta_min = np.kron(e_zeta[:-1], np.ones(nbg_zeta))
+        
+        xi_max = np.kron(e_xi[1:], np.ones(nbg_xi))
+        eta_max = np.kron(e_eta[1:], np.ones(nbg_eta))
+        zeta_max = np.kron(e_zeta[1:], np.ones(nbg_zeta))       
+        
+        xi_g = np.kron(np.ones(ne_xi), Rect_xi)
+        eta_g = np.kron(np.ones(ne_eta), Rect_eta)
+        zeta_g = np.kron(np.ones(ne_zeta), Rect_zeta)
 
 
-    def ShapeFunctionsAtGridPoints(self, xi, eta, zeta=None):
+
+        """ Going from the reference element to the parametric space  """
+        # Aranged gauss points in  xi direction  
+        xi = 0.5 * (xi_min + xi_max) + 0.5 * (xi_max - xi_min) * xi_g
+        # Aranged gauss points in  eta direction
+        eta = 0.5 * (eta_min + eta_max) + 0.5 * (eta_max - eta_min) * eta_g    
+        # Aranged gauss points in  zeta direction
+        zeta = 0.5 * (zeta_min + zeta_max) + 0.5 * (zeta_max - zeta_min) * zeta_g 
+        
+    
+        phi, dphidx, dphidy, dphidz, detJ = self.ShapeFunctions(xi, eta, zeta)
+        self.npg = phi.shape[0]
+
+        P = self.Get_P()
+        
+        """ Integration weights + measures + Jacobian of the transformation """
+        self.wdetJ = np.ones_like(detJ)
+
+        zero = sps.csr_matrix((self.npg, nbf))
+        self.phi = phi
+        
+        self.phix = sps.hstack((phi, zero, zero),  'csc')
+        self.phiy = sps.hstack((zero, phi, zero),  'csc')
+        self.phiz = sps.hstack((zero, zero, phi),  'csc')
+        
+        self.dphixdx = sps.hstack((dphidx, zero, zero),  'csc')
+        self.dphixdy = sps.hstack((dphidy, zero, zero),  'csc')
+        self.dphixdz = sps.hstack((dphidz, zero, zero),  'csc')
+        
+        self.dphiydx = sps.hstack((zero, dphidx, zero),  'csc')
+        self.dphiydy = sps.hstack((zero, dphidy, zero),  'csc')
+        self.dphiydz = sps.hstack((zero, dphidy, zero),  'csc')
+        
+        self.dphizdx = sps.hstack((zero, zero, dphidx),  'csc')
+        self.dphizdy = sps.hstack((zero, zero, dphidy),  'csc')
+        self.dphizdz = sps.hstack((zero, zero, dphidy),  'csc')
+
+        self.pgx = self.phi @ P[:, 0]
+        self.pgy = self.phi @ P[:, 1]
+        self.pgz = self.phi @ P[:, 2]
+
+
+    def ShapeFunctions(self, xi, eta, zeta=None, P=None):
         """ xi, eta (and zeta in 3D) are the 1d points 
         This method computes the basis functions on the mesh-grid point 
         obtained from the 1d vector points xi, eta (and zeta)
@@ -668,13 +751,15 @@ class BSplinePatch(object):
                        
         if self.dim == 2:    
             
+            #print(spline.getSpans())
             phi = spline.DN([xi, eta], k=[0, 0])
                      
             dphidxi = spline.DN([xi, eta], k=[1, 0])
             dphideta = spline.DN([xi, eta], k=[0, 1])
             
             
-            P = self.Get_P()
+            if P is None:
+                P = self.Get_P()
             
             dxdxi = dphidxi.dot(P[:, 0])
             dxdeta = dphideta.dot(P[:, 0])
@@ -700,11 +785,8 @@ class BSplinePatch(object):
             dphideta = spline.DN([xi, eta, zeta], k=[0, 1, 0]).tocsc()
             dphidzeta = spline.DN([xi, eta, zeta], k=[0, 0, 1]).tocsc()
             
-            print(spline.getDegrees())
-            print(spline.getKnots())
-            test = dphidxi.A[:, 0].reshape((5, 5, 5))
-            print(test)
-            P = self.Get_P()
+            if P is None:
+                P = self.Get_P()
             
             dxdxi = dphidxi.dot(P[:, 0])
             dxdeta = dphideta.dot(P[:, 0])
