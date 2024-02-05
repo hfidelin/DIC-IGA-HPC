@@ -21,6 +21,7 @@ from pyxel.mesher import StructuredMeshQ4
 import bsplyne as bs
 import pyxel as px
 import pickle
+from shapely.geometry import Polygon, Point
 
 
 class BSplinePatch(object):
@@ -450,7 +451,7 @@ class BSplinePatch(object):
             self.dphiydyy.T.dot(wg.dot(self.dphiydyy))
 
 
-    def Init_Polygon(self):
+    def Init_Polygon(self, cam):
         """
         Compute a polygon object from a mesh of a bspline patch.
         
@@ -512,10 +513,11 @@ class BSplinePatch(object):
         u, v = cam.P(coord[:, 0], coord[:, 1])
         coord = np.vstack((v, u))
         patch = Polygon(coord.T)
+        
         return patch
 
 
-    def IsInPatch(patch):
+    def IsInPatch(self, patch):
         """
         Compute the coordinate of the pixels contained by a bspline patch
         
@@ -596,7 +598,7 @@ class BSplinePatch(object):
             dxi_g = invJ[:, 0] * (x - xp) + invJ[:, 1] * (y - yp)
             deta_g = invJ[:, 2] * (x - xp) + invJ[:, 3] * (y - yp)
             
-            res = np.dot(dxg, dxg) + np.dot(dyg, dyg)
+            res = np.dot(dxi_g, dxi_g) + np.dot(deta_g, deta_g)
             
             xi_g = xi_g + dxi_g
             eta_g = eta_g + deta_g
@@ -624,7 +626,7 @@ class BSplinePatch(object):
         """
         
         # Approximation of the patch using a polygon
-        patch = self.Init_Polygon(m)
+        patch = self.Init_Polygon(cam)
         
         # Computing pixels that are inside the bspline patch
         pixel = self.IsInPatch(patch)
@@ -636,10 +638,20 @@ class BSplinePatch(object):
         xi_g, eta_g = self.InverseBSplineapping(xg, yg)
         
         spline = self.Get_spline()
-        phi =  spline.DN([xi_g, eta_g], k=[0,0])
+        phi = spline.DN(np.array([xi_g, eta_g]), k=[0,0])
+        
+        self.npg = phi.shape[0]  
+        self.wdetJ = np.ones_like(xi_g)
+        nbf = self.Get_nbf()
+        zero = sps.csr_matrix((self.npg, nbf))
+        self.phi = phi
+        self.phix = sps.hstack((phi, zero),  'csc')
+        self.phiy = sps.hstack((zero, phi),  'csc')
+        
         if P is None:
             P = self.Get_P()
         
+
         self.pgx = phi @ P[:, 0]
         self.pgy = phi @ P[:, 1]
         
@@ -799,7 +811,6 @@ class BSplinePatch(object):
         self.npg = phi.shape[0]
         
         P = self.Get_P()
-        
         self.wdetJ = np.ones_like(detJ)
         
         zero = sps.csr_matrix((self.npg, nbf))
