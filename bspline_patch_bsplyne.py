@@ -149,6 +149,11 @@ class BSplinePatch(object):
                   self.ctrlPts[2].ravel()]
         return P
   
+    
+    def Get_spline(self):
+        return bs.BSpline(self.degree, self.knotVect)
+    
+    
     def SelectNodes(self, n=-1):
         """
         Selection of nodes by hand in a mesh.
@@ -400,6 +405,7 @@ class BSplinePatch(object):
         self.degree = np.array(new_degree)
         self.knotVect = spline.getKnots()
         self.n = self.CtrlPts2N()
+        self.spline = bs.BSpline(self.degree, self.knotVect)
 
     def KnotInsertion(self, knots):
         
@@ -408,6 +414,7 @@ class BSplinePatch(object):
         self.ctrlPts = spline.knotInsertion(self.ctrlPts, knots)
         self.knotVect = spline.getKnots()
         self.n = self.CtrlPts2N()
+        self.spline = bs.BSpline(self.degree, self.knotVect)
      
     def Stiffness(self, hooke):
         """ 
@@ -443,6 +450,201 @@ class BSplinePatch(object):
             self.dphiydyy.T.dot(wg.dot(self.dphiydyy))
 
 
+    def Init_Polygon(self):
+        """
+        Compute a polygon object from a mesh of a bspline patch.
+        
+        Parameter:
+        ----------
+        
+        m : bspline mesh class from pyxel
+        """
+        
+        # Number of evaluation point for element contour
+        neval = [30, 30]
+        Pxm = self.n[:, 0]
+        Pym = self.n[:, 1]
+        
+        # parametric point for evaluation of element contour
+        
+        xi = np.linspace(
+            self.knotVect[0][self.degree[0]], self.knotVect[0][-self.degree[0]], neval[0])
+        eta = np.linspace(
+            self.knotVect[1][self.degree[1]], self.knotVect[1][-self.degree[1]], neval[1])
+        
+        # Iso parameters for the elements
+        xiu = np.unique(self.knotVect[0])
+        etau = np.unique(self.knotVect[1])
+        
+        # Basis functions
+        spline = self.Get_spline()
+        phi_xiu = spline.DN([xiu, eta], k=[0, 0])
+        phi_etau = spline.DN([xi, etau], k=[0, 0])
+        
+        # Projection in physical space using bspline mapping
+        x_xiu = phi_xiu @ Pxm
+        y_xiu = phi_xiu @ Pym
+        x_etau = phi_etau @ Pxm
+        y_etau = phi_etau @ Pym
+        
+        # Reshaping into element contour coordinates 
+        x_xiu = x_xiu.reshape((xiu.size, neval[1]))
+        y_xiu = y_xiu.reshape((xiu.size, neval[1]))
+        x_etau = x_etau.reshape((neval[0], etau.size))
+        y_etau = y_etau.reshape((neval[0], etau.size))
+        
+        
+        xi_first = []
+        xi_last = []
+        for i in range(x_xiu.shape[1]):
+            xi_first.append([x_xiu[0, i], y_xiu[0, i]])
+            xi_last.append([x_xiu[-1, i], y_xiu[-1, i]])
+        
+        
+        eta_first = []
+        eta_last = []
+        for i in range(x_etau.shape[0]):
+            eta_first.append([x_etau[i, 0], y_etau[i, 0]])
+            eta_last.append([x_etau[i, -1], y_etau[i, -1]])
+           
+        coord = np.vstack((xi_first, eta_last, xi_last[::-1], eta_first[::-1]))
+        
+        u, v = cam.P(coord[:, 0], coord[:, 1])
+        coord = np.vstack((v, u))
+        patch = Polygon(coord.T)
+        return patch
+
+
+    def IsInPatch(patch):
+        """
+        Compute the coordinate of the pixels contained by a bspline patch
+        
+        Parameter:
+        ----------
+        
+        patch : polygon class from shapely.geometry that describe a bspline patch
+        
+        Return:
+        -------
+        
+        x, y : np.array containing the coordinates of the pixels within the 
+                bspline patch
+        """
+        
+        xmin, ymin, xmax, ymax = patch.bounds
+    
+        # Meshgrid of bounding box
+        xx, yy = np.meshgrid(np.arange(xmin, xmax + 1), np.arange(ymin, ymax + 1))
+    
+        X = xx.flatten()
+        Y = yy.flatten()
+        points = []
+        for x, y in zip(X, Y):
+            if patch.contains(Point(x, y)):
+                points.append([x, y])
+    
+        points = np.array(points)
+    
+        return points
+
+    def InverseBSplineapping(self, x, y):
+        """ 
+        Inverse the BSpline mapping in order to map the coordinates
+        of any physical points (x, y) to their corresponding position in
+        the parametric space (xg, yg).
+        
+        Parameter : 
+            m : bspline mesh from pyxel
+            xpix : x coordinate in physical space
+            ypix : y coordinate in physical space
+            
+        Return :
+            xg, yg : x coordinate 
+        """
+        
+        # Basis function
+        
+        spline = self.Get_spline()
+        
+        # Coordinates of controls points
+        xn = self.n[:, 0]
+        yn = self.n[:, 1]
+        
+        # Initializing  parametric integration points to zero
+        xi_g = 0.5 * np.ones_like(x) #0 * x
+        eta_g = 0.5 * np.ones_like(y) #0 * y
+        res = 1
+        # Gauss Newton loop
+        for k in range(7):
+            
+            phi = spline.DN(np.array([xi_g, eta_g]), k=[0,0])
+            N_r = spline.DN(np.array([xi_g, eta_g]), k=[1,0])
+            N_s = spline.DN(np.array([xi_g, eta_g]), k=[0,1])
+            
+            dxdr = N_r @ xn
+            dydr = N_r @ yn
+            dxds = N_s @ xn
+            dyds = N_s @ yn
+            
+            detJ = dxdr * dyds - dydr * dxds
+            invJ = np.array([dyds / detJ, -dxds / detJ,
+                             -dydr / detJ, dxdr / detJ]).T
+            
+            xp = phi @ xn
+            yp = phi @ yn
+            
+            dxi_g = invJ[:, 0] * (x - xp) + invJ[:, 1] * (y - yp)
+            deta_g = invJ[:, 2] * (x - xp) + invJ[:, 3] * (y - yp)
+            
+            res = np.dot(dxg, dxg) + np.dot(dyg, dyg)
+            
+            xi_g = xi_g + dxi_g
+            eta_g = eta_g + deta_g
+            
+            xi_g = np.clip(xi_g, 0, 1)
+            eta_g = np.clip(eta_g, 0, 1)
+            
+            print(f"Itération {k} | résidu : {res}")
+            if res < 1.0e-6:
+                break
+            
+        return xi_g, eta_g
+
+    def DICIntegrationPixel(self, m, cam, P=None):
+        """
+        Building integration operator where integration points are located
+        in center of pixels
+        
+        Parameter:
+        ---------
+        
+        m : pyxel bspline mesh
+        
+        cam : camera model from pyxel
+        """
+        
+        # Approximation of the patch using a polygon
+        patch = self.Init_Polygon(m)
+        
+        # Computing pixels that are inside the bspline patch
+        pixel = self.IsInPatch(patch)
+        
+        # Inversing camera model to compute physical coordinate of those pixel
+        xg, yg = cam.PinvNL(pixel[:, 1], pixel[:, 0])
+        
+        # Inversing bspline mapping
+        xi_g, eta_g = self.InverseBSplineapping(xg, yg)
+        
+        spline = self.Get_spline()
+        phi =  spline.DN([xi_g, eta_g], k=[0,0])
+        if P is None:
+            P = self.Get_P()
+        
+        self.pgx = phi @ P[:, 0]
+        self.pgy = phi @ P[:, 1]
+        
+        
+        
     def GaussIntegration(self, npg=None, P=None):
         """ Gauss integration: build of the global differential operators """
         if npg is None:
@@ -487,8 +689,6 @@ class BSplinePatch(object):
 
         mes_xi = np.kron(np.ones(eta.shape[0]), mes_xi)
         mes_eta = np.kron(mes_eta, np.ones(xi.shape[0]))
-
-        
 
         if P is None:
             P = self.Get_P()
@@ -653,6 +853,8 @@ class BSplinePatch(object):
 
         self.pgx = self.phi @ P[:, 0]
         self.pgy = self.phi @ P[:, 1]
+
+
 
 
 
