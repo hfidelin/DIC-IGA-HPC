@@ -19,10 +19,8 @@ import matplotlib.pyplot as plt
 from pyxel.camera import Camera
 from pyxel.mesher import StructuredMeshQ4
 import bsplyne as bs
+from pandas import unique
 import pyxel as px
-import pickle
-from shapely.geometry import Polygon, Point
-
 
 class BSplinePatch(object):
     def __init__(self, ctrlPts, degree, knotVect):
@@ -529,14 +527,15 @@ class BSplinePatch(object):
         Return:
         -------
         
-        x, y : np.array containing the coordinates of the pixels within the 
+        points : np.array containing the coordinates of the pixels within the 
                 bspline patch
         """
         
         xmin, ymin, xmax, ymax = patch.bounds
     
         # Meshgrid of bounding box
-        xx, yy = np.meshgrid(np.arange(xmin, xmax + 1), np.arange(ymin, ymax + 1))
+        xx, yy = np.meshgrid(np.arange(xmin, xmax + 1), 
+                             np.arange(ymin, ymax + 1))
     
         X = xx.flatten()
         Y = yy.flatten()
@@ -548,11 +547,87 @@ class BSplinePatch(object):
         points = np.array(points)
     
         return points
+    
+    def IsInSTL(self, mesh):
+        """
+        Compute the coordinate of the pixels contained by a bspline patch
+        
+        Parameter:
+        ----------
+        
+        mesh : stl mesh 
+        
+        Return:
+        -------
+        
+         points : np.array containing the coordinates of the pixels within the 
+                bspline patch
+        """
+        xmin, ymin, xmax, ymax, zmin, zmax = mesh.bounds
+        
+        # Meshgrid of bounding box
+        xx, yy, zz = np.meshgrid(np.arange(xmin, xmax + 1), 
+                             np.arange(ymin, ymax + 1),
+                             np.arange(zmin, zmax + 1))
+    
+        
+        X = xx.flatten()
+        Y = yy.flatten()
+        Z = zz.flatten()
+        points = []
+        
+        for x, y, z in zip(X, Y, Z):
+            if mesh.contains(Point(x, y, z)):
+                points.append([x, y])
+    
+        points = np.array(points)
+    
+        return points
+        
+        
+    def Get_pixels(self, cam, n=None, P=None):
 
-    def InverseBSplineapping(self, x, y):
+        if n is None:
+            # if n is a camera then n is autocomputed
+            n = self.GetApproxElementSize(cam)
+
+        
+        if type(n) == int:
+            n = np.array([n, n], dtype=int)
+        
+        if P is None:
+            P = self.Get_P()
+            
+        n = np.maximum(self.degree + 1, n)
+        
+        # Nombre de point d'intégration par direction
+        nbg_xi = n[0]
+        nbg_eta = n[1]
+        
+        pxi = 1.0 / nbg_xi
+        peta = 1.0 / nbg_eta
+        xi_g = np.linspace(pxi, 1-pxi, nbg_xi)
+        eta_g = np.linspace(peta, 1-peta, nbg_eta)
+        spline = self.Get_spline()
+        phi = spline.DN([xi_g, eta_g], k=[0,0])
+        
+        x_g = phi @ P[:, 0]
+        y_g = phi @ P[:, 1]
+        
+        u_g, v_g = cam.P(x_g, y_g)
+        
+        u_g = np.round(u_g)
+        v_g = np.round(v_g)
+        
+        
+        return u_g, v_g
+        
+        
+    
+    def InverseBSplineMapping(self, x, y):
         """ 
         Inverse the BSpline mapping in order to map the coordinates
-        of any physical points (x, y) to their corresponding position in
+        of any physical points (x, y, z) to their corresponding position in
         the parametric space (xg, yg).
         
         Parameter : 
@@ -612,7 +687,9 @@ class BSplinePatch(object):
             
         return xi_g, eta_g
 
-    def DICIntegrationPixel(self, m, cam, P=None):
+      
+     
+    def DICIntegrationPixel(self, m, cam, ninte=1000, P=None):
         """
         Building integration operator where integration points are located
         in center of pixels
@@ -625,17 +702,41 @@ class BSplinePatch(object):
         cam : camera model from pyxel
         """
         
-        # Approximation of the patch using a polygon
-        patch = self.Init_Polygon(cam)
+        # Get spline object for basis function
+        spline = m.Get_spline()
         
-        # Computing pixels that are inside the bspline patch
-        pixel = self.IsInPatch(patch)
+        # initiating control points
+        P = m.Get_P()
         
-        # Inversing camera model to compute physical coordinate of those pixel
-        xg, yg = cam.PinvNL(pixel[:, 1], pixel[:, 0])
+        # Initialize evaluation points
+        xi = np.linspace(0, 1, ninte)
+        eta = np.linspace(0, 1, ninte)
         
-        # Inversing bspline mapping
-        xi_g, eta_g = self.InverseBSplineapping(xg, yg)
+        # Basis function at evaluation points
+        phi = spline.DN([xi, eta], k=[0, 0])
+        
+        # Going from parametric space to image space
+        ub, vb = cam.P(phi @ P[:, 0], phi @ P[:, 1])
+        
+        # Placing evalution points in image space in the center of pixels
+        ub = np.round(ub)
+        vb = np.round(vb)
+        
+        # Getting rid of the duplicate points
+        pixel = np.unique(np.array([ub, vb]).T, axis=0)
+        
+        # Going from image space to physical space by inversing camera model
+        xg, yg = cam.PinvNL(pixel[:, 0], pixel[:, 1])
+        
+        # Going from physical space to parametric space by inversin mapping
+        xi_g, eta_g = m.InverseBSplineMapping(xg, yg)
+        
+        # Create boolean mask to delete evaluation points located on the border
+        select = (xi_g>0) & (xi_g<1) & (eta_g>0) & (eta_g<1)
+        
+        xi_g = xi_g[select]
+        eta_g = eta_g[select]
+
         
         spline = self.Get_spline()
         phi = spline.DN(np.array([xi_g, eta_g]), k=[0,0])
@@ -654,7 +755,7 @@ class BSplinePatch(object):
 
         self.pgx = phi @ P[:, 0]
         self.pgy = phi @ P[:, 1]
-        
+      
         
         
     def GaussIntegration(self, npg=None, P=None):
@@ -833,11 +934,10 @@ class BSplinePatch(object):
         
         n = np.maximum(self.degree + 1, n)
         
-        # Nombre de point d'intégration par élément
+        # Nombre de point d'intégration par direction
         nbg_xi = n[0]
         nbg_eta = n[1]
         
-        """Espace de référence [-1,1]"""
         pxi = 1.0 / nbg_xi
         peta = 1.0 / nbg_eta
         xi_g = np.linspace(pxi, 1-pxi, nbg_xi)
@@ -866,7 +966,204 @@ class BSplinePatch(object):
         self.pgy = self.phi @ P[:, 1]
 
 
+    def InverseBSplineMapping_3D(self, x, y, z):
+        """ 
+        Inverse the BSpline mapping in order to map the coordinates
+        of any physical points (x, y, z) to their corresponding position in
+        the parametric space (xg, yg).
+        
+        Parameter : 
+            m : bspline mesh from pyxel
+            xpix : x coordinate in physical space
+            ypix : y coordinate in physical space
+            
+        Return :
+            xg, yg : x coordinate 
+        """
+        
+        # Basis function
+        print("spline")
+        spline = self.Get_spline()
+        
+        # Coordinates of controls points
+        print("get control points")
+        xn = self.n[:, 0]
+        yn = self.n[:, 1]
+        zn = self.n[:, 2]
+        
+        # Initializing  parametric integration points to zero
+        print("initialisation")
+        xi_g = 0 * x
+        eta_g = 0 * y 
+        zeta_g = 0 * z
+        res = 1
+        # Gauss Newton loop
+        for k in range(7):
+            print("fct de bases")
+            phi = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,0,0])
+            N_xi = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[1,0,0])
+            N_eta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,1,0])
+            N_zeta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,0,1])
+            
+            dxdxi = N_xi @ xn
+            dydxi = N_xi @ yn
+            dzdxi = N_xi @ zn
+            
+            dxdeta = N_eta @ xn
+            dydeta = N_eta @ yn
+            dzdeta = N_eta @ zn
+            
+            dxdzeta = N_zeta @ xn
+            dydzeta = N_zeta @ yn
+            dzdzeta = N_zeta @ zn
+            del N_xi, N_eta, N_zeta
+            # Applying Sarrus Rules
+            print("calcul det")
+            aei = dxdxi*dydeta*dzdzeta
+            dhc = dxdeta*dydzeta*dzdxi
+            bfg = dxdzeta*dydxi*dzdeta
+            gec = dxdzeta*dydeta*dzdxi
+            dbi = dxdeta*dydxi*dzdzeta
+            ahf = dxdxi*dydzeta*dzdeta
+            
+            detJ = aei + dhc + bfg - gec - dbi - ahf
+            
+            # Comatrix of J
+            print("calcul inv")
+            ComJ_11 = dydeta * dzdzeta - dzdeta * dydzeta
+            ComJ_21 = - (dxdeta * dzdzeta - dzdeta * dxdzeta)
+            ComJ_31 = dxdeta * dzdzeta - dydeta * dxdzeta
+            
+            ComJ_12 = -(dydxi * dzdzeta - dzdxi * dydzeta)
+            ComJ_22 = dxdxi * dzdzeta - dzdxi * dxdzeta
+            ComJ_32 = -(dxdxi * dydzeta - dydxi * dxdzeta)
+            
+            ComJ_13 = dydxi * dzdeta - dzdxi * dydeta
+            ComJ_23 = -(dxdxi * dzdeta - dzdxi * dxdeta)
+            ComJ_33 = dxdxi * dydeta - dydxi * dzdeta
+            
+            
+            invJ = np.array([ComJ_11 / detJ, ComJ_12 / detJ,ComJ_13 / detJ,
+                             ComJ_21 / detJ, ComJ_22 / detJ, ComJ_23 / detJ,
+                             ComJ_31 / detJ, ComJ_32 / detJ, ComJ_33 / detJ]).T
 
+            
+            xp = phi @ xn
+            yp = phi @ yn
+            zp = phi @ zn
+            del phi
+            
+            print("calcul dxi,deta,dzeta")
+            dxi_g = invJ[:, 0] * (x - xp) + invJ[:, 1] * (y - yp)
+            deta_g = invJ[:, 2] * (x - xp) + invJ[:, 3] * (y - yp)
+            dzeta_g = invJ[:, 4] * (z - zp) + invJ[:, 5] * (z - zp)
+            
+            print("calcul res")
+            res = np.dot(dxi_g, dxi_g) +\
+                  np.dot(deta_g, deta_g)+\
+                  np.dot(dzeta_g, dzeta_g)
+            
+            xi_g = xi_g + dxi_g
+            eta_g = eta_g + deta_g
+            
+            print("clip")
+            xi_g = np.clip(xi_g, 0, 1)
+            eta_g = np.clip(eta_g, 0, 1)
+            zeta_g = np.clip(zeta_g, 0, 1)
+            
+            print(f"Itération {k} | résidu : {res}")
+            if res < 1.0e-6:
+                break
+            
+        return xi_g, eta_g, zeta_g
+
+
+    def DVCIntegrationPixel(self, m, cam, ninte=1000, P=None):
+        """
+        Building integration operator where integration points are located
+        in center of pixels
+        
+        Parameter:
+        ---------
+        
+        m : pyxel bspline mesh
+        
+        cam : camera model from pyxel
+        """
+        
+        # Get spline object for basis function
+        spline = m.Get_spline()
+        
+        # initiating control points
+        P = m.Get_P()
+        
+        # Initialize evaluation points
+        xi = np.linspace(0, 1, ninte)
+        eta = np.linspace(0, 1, ninte)
+        zeta = np.linspace(0, 1, ninte)
+        print("Je démarre le calcule de phi")
+        # Basis function at evaluation points
+        phi = spline.DN([xi, eta, zeta], k=[0, 0, 0])
+        print("J'ai fini le calcul de phi")
+        # Going from parametric space to physical space
+        print("Calcul produit phi x P")
+        x = phi @ P[:, 0]
+        y = phi @ P[:, 1]
+        z = phi @ P[:, 2]
+        
+        del phi
+        # Going from physical space to parametric space
+        print("Projection dans image")
+        u, v, w = cam.P(x, y, z)
+        del x, y, z
+        # Placing evalution points in image space in the center of pixels
+        print("round")
+        u = np.round(u)
+        v = np.round(v)
+        w = np.round(w)
+        print("unique")
+        # Getting rid of the duplicate points
+        voxel = np.unique(np.array([u, v, w]).T, axis=0)
+        del u, v, w
+        print(f"voxel shape : {voxel.shape}")
+        print("Je commence inversion modèle caméra")
+        # Going from image space to physical space by inversing camera model
+        xg, yg, zg = cam.Pinv(voxel[:, 0], voxel[:, 1], voxel[:, 2])
+        print("J'ai fini")
+        print("Je commence inversion mapping")
+        # Going from physical space to parametric space by inversin mapping
+        xi, eta, zeta = m.InverseBSplineMapping_3D(xg, yg, zg)
+        del xg, yg, zg
+        print("J'ai fini")
+        # Create boolean mask to delete evaluation points located on the border
+        select = (xi>0) & (xi<1) &\
+                 (eta>0) & (eta<1) &\
+                 (zeta>0) & (zeta<1)
+        
+        xi = xi[select]
+        eta = eta[select]
+        zeta = zeta[select]
+
+        
+        spline = self.Get_spline()
+        phi = spline.DN(np.array([xi, eta, zeta]), k=[0,0,0])
+        del xi, eta, zeta
+        self.npg = phi.shape[0]  
+        self.wdetJ = np.ones_like(xi)
+        nbf = self.Get_nbf()
+        zero = sps.csr_matrix((self.npg, nbf))
+        self.phi = phi
+        self.phix = sps.hstack((phi, zero, zero),  'csc')
+        self.phiy = sps.hstack((zero, phi, zero),  'csc')
+        self.phiz = sps.hstack((zero, zero, phi),  'csc')
+        
+        if P is None:
+            P = self.Get_P()
+        
+
+        self.pgx = phi @ P[:, 0]
+        self.pgy = phi @ P[:, 1]
+        self.pgz = phi @ P[:, 2]
 
 
     def DVC_Integration(self, n=None, G=False):
@@ -1153,57 +1450,3 @@ def make_stl_mesh(spline, ctrl_pts, n_eval_per_elem=10, remove_empty_areas=True)
     data['vectors'] = tri
     m = mesh.Mesh(data, remove_empty_areas=remove_empty_areas)
     return m
-
-# %% Test
-
-if __name__ == "__main__":
-    
-
-    f = px.Image('zoom-0053_1.tif').Load()
-    # f.Plot()
-    g = px.Image('zoom-0070_1.tif').Load()
-
-    a = 0.925
-    Xi = np.array([[0.5, 0.75, 1],
-                [0.5*a, 0.75*a, 1*a],
-                [0,0, 0]])
-    Yi = np.array([[0, 0, 0],
-                [0.5*a, 0.75*a, 1*a],
-                [0.5, 0.75, 1]])
-
-    ctrlPts = np.array([Xi.T, Yi.T])
-    degree = [2, 2]
-    kv1 = np.array([0, 0, 0, 1, 1, 1])
-    kv2 = np.array([0, 0, 0, 1, 1, 1])
-    knotVect = [kv1, kv2]
-
-    n = 5
-    newr = np.linspace(0, 1, n+2)[1:-1]
-    n = 10
-    newt = np.linspace(0, 1, n+2)[1:-1]
-    m = BSplinePatch(ctrlPts, degree, knotVect)
-    m.Plot()
-
-
-    m.KnotInsertion([newr, newt])
-    # m.DegreeElevation(np.array([3, 3]))
-    #m.Plot()
-
-    cam = px.Camera([100, 6.95, -5.35, 0])
-
-    m.Connectivity()
-    # %% gauss
-    m.GaussIntegration()
-    
-    
-    
-    
-    # %% Pas gauss
-    # m.DICIntegration(cam)
-    U = px.MultiscaleInit(f, g, m, cam, scales=[2, 1])
-    U, res = px.Correlate(f, g, m, cam, U0=U)
-
-    m.Plot(U, alpha=0.5)
-    m.Plot(U=3*U)
-
-
