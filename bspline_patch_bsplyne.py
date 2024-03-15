@@ -628,8 +628,6 @@ class BSplinePatch(object):
             l = max(u) - min(u)
             L = max(v) - min(v)
             
-            
-            
             bbox_area = l * L
             return bbox_area
         
@@ -650,93 +648,37 @@ class BSplinePatch(object):
             bbox_area = l * L * LL
             return bbox_area
         
-        
+     
+     
     def compute_largest_edge(self, cam, e):
         
         P = self.Get_P()
+        spline = self.Get_spline()
         
         if self.dim == 2:
             
-            N, _, _, _, _ = self.ShapeFunctions(e.xi, e.eta)
-            
-            x = N @ P[:, 0]
-            y = N @ P[:, 1]
-            u, v, w = cam.P(x, y)
-            
-            
-            # plt.plot([v[0], v[1]], [u[0], u[1]])
-            L1 = np.sqrt( (u[1] - u[0]) ** 2 + (v[1]- v[0]) ** 2 + (w[1]- w[0]) ** 2)
-            L2 = np.sqrt( (u[2] - u[0]) ** 2 + (v[2]- v[0]) ** 2 + (w[2]- w[0]) ** 2)
-
-            
-            L_max = max(L1, L2)
-            return int(L_max)
-        
-        if self.dim == 3:
-            
-            N, _, _, _, _ = self.ShapeFunctions(e.xi, e.eta, e.zeta)
-            
-            x = N @ P[:, 0]
-            y = N @ P[:, 1]
-            z = N @ P[:, 2]
-            u, v, w = cam.P(x, y, z)
-            
-            
-            # plt.plot([v[0], v[1]], [u[0], u[1]])
-            L1 = np.sqrt( (u[1] - u[0]) ** 2 + (v[1]- v[0]) ** 2 + (w[1]- w[0]) ** 2)
-            L2 = np.sqrt( (u[2] - u[0]) ** 2 + (v[2]- v[0]) ** 2 + (w[2]- w[0]) ** 2)
-            L3 = np.sqrt( (u[3] - u[0]) ** 2 + (v[3]- v[0]) ** 2 + (w[3]- w[0]) ** 2)
-
-            
-            L_max = max(L1, L2, L3)
-            return int(L_max)
-            
-
-    def Get_param(self, cam):
-        
-        P = self.Get_P()
-        XI = np.empty(0)
-        ETA = np.empty(0)
-        
-        for key in self.e:
-            e = self.e[key]
-            N, _, _, _ = self.ShapeFunctions(e.xi, e.eta)
+            N = spline.DN([e.xi, e.eta], k=[0, 0])
             
             x = N @ P[:, 0]
             y = N @ P[:, 1]
             u, v = cam.P(x, y)
             
             
-            # plt.plot([v[0], v[1]], [u[0], u[1]])
-            l = max(u) - min(u)
-            L = max(v) - min(v)
-            print(f"bbox area : {l * L}")
-            # plt.plot([vmin, vmax], [umin, umax], c='r')
+            # First corner
+            L1 = np.sqrt( (u[1] - u[0]) ** 2 + (v[1]- v[0]) ** 2)
+            L2 = np.sqrt( (u[2] - u[0]) ** 2 + (v[2]- v[0]) ** 2)
             
-            bbox_area = l * L
-            bbox_area *= 2
-            
-            xi = np.linspace(e.xi[0], e.xi[1], int(np.sqrt(bbox_area)))
-            eta = np.linspace(e.eta[0], e.eta[1], int(np.sqrt(bbox_area)))
-            param = np.meshgrid(xi, eta, indexing='ij')
-            xi = param[0].ravel()
-            eta = param[1].ravel()
-            XI = np.hstack((XI, xi))
-            ETA = np.hstack((ETA, eta))
-        
-        return XI, ETA
+            # Last corner
+            L3 = np.sqrt( (u[-2] - u[-1]) ** 2 + (v[1]- v[0]) ** 2)
+            L4 = np.sqrt( (u[-3] - u[-1]) ** 2 + (v[2]- v[0]) ** 2)
 
-    def Get_param_3D(self, cam):
+            
+            L_max = max(L1, L2, L3, L4)
+            return int(np.ceil(L_max))
         
-        # spline = self.Get_spline()
-        P = self.Get_P()
-        XI = np.empty(0)
-        ETA = np.empty(0)
-        ZETA = np.empty(0)
-        
-        for key in self.e:
-            e = self.e[key]
-            N, _, _, _, _ = self.ShapeFunctions(e.xi, e.eta, e.zeta)
+        if self.dim == 3:
+            
+            N = spline.DN([e.xi, e.eta, e.zeta], k=[0, 0, 0])
             
             x = N @ P[:, 0]
             y = N @ P[:, 1]
@@ -744,29 +686,98 @@ class BSplinePatch(object):
             u, v, w = cam.P(x, y, z)
             
             
-            # plt.plot([v[0], v[1]], [u[0], u[1]])
+            # First corner
             L1 = np.sqrt( (u[1] - u[0]) ** 2 + (v[1]- v[0]) ** 2 + (w[1]- w[0]) ** 2)
             L2 = np.sqrt( (u[2] - u[0]) ** 2 + (v[2]- v[0]) ** 2 + (w[2]- w[0]) ** 2)
             L3 = np.sqrt( (u[3] - u[0]) ** 2 + (v[3]- v[0]) ** 2 + (w[3]- w[0]) ** 2)
+            
+            # Last corner
+            L4 = np.sqrt( (u[-2] - u[-1]) ** 2 + (v[-2]- v[-1]) ** 2 + (w[-2]- w[-1]) ** 2)
+            L5 = np.sqrt( (u[-3] - u[-1]) ** 2 + (v[-3]- v[-1]) ** 2 + (w[-3]- w[-1]) ** 2)
+            L6 = np.sqrt( (u[-4] - u[-1]) ** 2 + (v[-4]- v[-1]) ** 2 + (w[-4]- w[-1]) ** 2)
+            
 
             
-            L_max = max(L1, L2, L3)
-            L_max = int(L_max * 2)
-            print(f"Elem {key}\t| L_max = {L_max}")
-            xi = np.linspace(e.xi[0], e.xi[1], L_max)
-            eta = np.linspace(e.eta[0], e.eta[1], L_max)
-            zeta = np.linspace(e.zeta[0], e.zeta[1], L_max)
-            param = np.meshgrid(xi, eta, zeta, indexing='ij')
-            xi = param[0].ravel()
-            eta = param[1].ravel()
-            zeta = param[2].ravel()
-            XI = np.hstack((XI, xi))
-            ETA = np.hstack((ETA, eta))
-            ZETA = np.hstack((ZETA, zeta))
+            L_max = max(L1, L2, L3, L4, L5, L6)
+            return int(L_max)
         
-        return XI, ETA, ZETA
+    def _area(self, cam):
+            
+        m2 = self
+        if self.dim == 2:
+            
+            m2.GaussIntegration([1, 1])
+            dudx, dudy, dvdx, dvdy = cam.dPdX(m2.pgx, m2.pgy)
+            detJP = dudx * dvdy - dvdx * dudy
+            return m2.wdetJ * detJP
+            
+        if self.dim == 3:
+            
+            m2.GaussIntegration([1, 1, 1])
+            dudx, dudy, dudz, dvdx, dvdy, dvdz, dwdx, dwdy, dwdz = cam.dPdX(m2.pgx, m2.pgy, m2.pgz)
+            
+            detJP = dudx*dvdy*dwdz + dvdx*dudy*dwdz + dudx*dwdy*dvdz - \
+                    dwdx*dvdy*dudz - dvdx*dwdy*dudz - dwdx*dudy*dvdz
+                    
+            return m2.wdetJ * detJP
+            
+    def compute_elem_area(self, e, areas):
+        return int(areas[e.num])        
+            
 
-    def InverseBSplineMapping(self, f, cam, x, y, init=None, elem=None):
+    def Get_param(self, cam):
+        
+        P = self.Get_P()
+        spline = self.Get_spline()
+        XI = np.empty(0)
+        ETA = np.empty(0)
+        areas = self._area(cam)
+        if self.dim == 2 :
+            print('2d')
+            for key in self.e:
+                e = self.e[key]                
+                
+                N_pix = self.compute_largest_edge(cam, e)
+                # N_pix = self.compute_bbox_area(cam, e)
+                # N_pix = self.compute_elem_area(e, areas)
+    
+                print(f"élément {key} | N_pix : {N_pix}")
+                xi = np.linspace(e.xi[0], e.xi[1], N_pix)
+                eta = np.linspace(e.eta[0], e.eta[1], N_pix)
+                param = np.meshgrid(xi, eta, indexing='ij')
+                xi = param[0].ravel()
+                eta = param[1].ravel()
+                XI = np.hstack((XI, xi))
+                ETA = np.hstack((ETA, eta))
+            
+            return XI, ETA
+        
+        if self.dim == 3:
+            print('3d')
+            ZETA = np.empty(0)
+            for key in self.e:
+                e = self.e[key]
+
+                
+                N_pix = self.compute_largest_edge(cam, e)
+                print(f"Elem {key}\t| N_pix = {N_pix}")
+                xi = np.linspace(e.xi[0], e.xi[1], N_pix)
+                eta = np.linspace(e.eta[0], e.eta[1], N_pix)
+                zeta = np.linspace(e.zeta[0], e.zeta[1], N_pix)
+                param = np.meshgrid(xi, eta, zeta, indexing='ij')
+                xi = param[0].ravel()
+                eta = param[1].ravel()
+                zeta = param[2].ravel()
+                
+                XI = np.hstack((XI, xi))
+                ETA = np.hstack((ETA, eta))
+                ZETA = np.hstack((ZETA, zeta))
+                
+            print(f"There is {XI.shape[0]} eval points")
+            return XI, ETA, ZETA
+           
+
+    def InverseBSplineMapping(self, x, y, init=None, elem=None):
         """ 
         Inverse the BSpline mapping in order to map the coordinates
         of any physical points (x, y, z) to their corresponding position in
@@ -800,7 +811,7 @@ class BSplinePatch(object):
             
         else :
             xi_g = init[0]
-            eta_g = init[0]
+            eta_g = init[1]
         
         #px.PlotMeshImage(f, self, cam)
         res = 1
@@ -832,21 +843,14 @@ class BSplinePatch(object):
             
             res = np.linalg.norm(x - xp) + np.linalg.norm(y - yp) 
             
-            
             if elem is None:
                 xi_g = np.clip(xi_g, 0, 1)
                 eta_g = np.clip(eta_g, 0, 1)
                 
             else :
-                
                 xi_g = np.clip(xi_g, elem.xi[0], elem.xi[1])
                 eta_g = np.clip(eta_g, elem.eta[0], elem.eta[1])
                 
-            
-            # N = spline.DN(np.array([xi_g, eta_g]), k=[0, 0])
-            # u, v = cam.P(N @ P[:, 0], N @ P[:, 1])
-            # plt.scatter(v, u, label=f'Itération {k}')
-            # plt.legend()
             
             print(f"Res : {res}")
             if res < 1.0e-6:
@@ -866,32 +870,38 @@ class BSplinePatch(object):
         m : pyxel bspline mesh
 
         cam : camera model from pyxel
-        """
+        
 
         if type(ninte) == int:
             ninte = [ninte, ninte]
         if ninte is None:
             ninte = [1000, 1000]
             
-        nbg_xi = ninte[0]
-        nbg_eta = ninte[1]
+        # nbg_xi = ninte[0]
+        # nbg_eta = ninte[1]
         
-        pxi = 1.0 / nbg_xi
-        peta = 1.0 / nbg_eta
-        # Get spline object for basis function
-        spline = self.Get_spline()
-
+        # pxi = 1.0 / nbg_xi
+        # peta = 1.0 / nbg_eta
+        
+       
+        xi = np.linspace(0, 1, ninte[0])
+        eta = np.linspace(0, 1, ninte[1])
+        """
         # initiating control points
         P = self.Get_P()
 
         # Initialize evaluation points
-        xi = np.linspace(0, 1, ninte[0])
-        eta = np.linspace(0, 1, ninte[1])
+        
+        xi, eta = self.Get_param(cam)
         
         param = np.meshgrid(xi, eta, indexing='ij')
         
+        # Get spline object for basis function
+        spline = self.Get_spline()
+        
         # Basis function at evaluation points
-        phi = spline.DN([xi, eta], k=[0, 0])
+        phi = spline.DN(np.array([xi, eta]), k=[0, 0])
+        # phi = spline.DN([xi, eta], k=[0, 0])
         
         # Going from parametric space to physical space
         x = phi @ P[:, 0]
@@ -950,6 +960,76 @@ class BSplinePatch(object):
         self.pgy = phi @ P[:, 1]
         
         return init, xi, eta
+    
+    def DICIntegrationPixelElem(self, f, m, cam, P=None):
+        
+        if P is None :
+            P = self.Get_P()
+        
+        spline = self.Get_spline()
+        
+        xi_glob = np.empty(0)
+        eta_glob = np.empty(0)
+        
+        for key in m.e:
+            
+            e = m.e[key]
+            print(f"\nÉlément {key}")
+            N_pix = self.compute_largest_edge(cam, e)
+            
+            xi = np.linspace(e.xi[0], e.xi[1], N_pix)
+            eta = np.linspace(e.eta[0], e.eta[1], N_pix)
+            param = np.meshgrid(xi, eta, indexing='ij')
+            N = spline.DN([xi, eta], k=[0,0])
+            
+            u, v = cam.P(N @ P[:, 0], N @ P[:, 1])
+            
+            ur = np.round(u).astype('uint16')
+            vr = np.round(v).astype('uint16')
+            
+            Nx = f.pix.shape[0]
+            Ny = f.pix.shape[1]
+            
+            # idpix = - Nx * vr + ur
+            idpix = np.ravel_multi_index((ur, vr), (Nx, Ny))
+            _, rep = np.unique(idpix, return_index=True)
+                    
+            ur = ur[rep]
+            vr = vr[rep]
+            
+            xi_init = param[0].ravel()[rep]
+            eta_init = param[1].ravel()[rep]
+                    
+            init = [xi_init, eta_init]
+            
+            xg, yg = cam.Pinv(ur.astype(float), vr.astype(float))
+            
+            xi, eta = self.InverseBSplineMapping(xg, yg, init=init, elem=e)
+            
+            select = (xi > e.xi[0]) & (xi < e.xi[1]) &\
+                 (eta > e.eta[0]) & (eta < e.eta[1]) 
+            
+            xi = xi[select]
+            eta = eta[select]
+            
+            xi_glob = np.hstack((xi_glob, xi))
+            eta_glob = np.hstack((eta_glob, eta))
+            
+        phi = spline.DN(np.array([xi_glob, eta_glob]), k=[0, 0])
+
+        self.npg = phi.shape[0]
+        self.wdetJ = np.ones_like(xi_glob)
+        nbf = self.Get_nbf()
+        zero = sps.csr_matrix((self.npg, nbf))
+        self.phi = phi
+        self.phix = sps.hstack((phi, zero),  'csc')
+        self.phiy = sps.hstack((zero, phi),  'csc')
+
+        self.pgx = phi @ P[:, 0]
+        self.pgy = phi @ P[:, 1]   
+            
+            
+            
 
     def GaussIntegration(self, npg=None, P=None):
         """ Gauss integration: build of the global differential operators """
@@ -1226,90 +1306,56 @@ class BSplinePatch(object):
         self.pgx = self.phi @ P[:, 0]
         self.pgy = self.phi @ P[:, 1]
 
-    def DIntegration(self, n=100):
 
-        if type(n) == int:
-            n = np.array([n, n], dtype=int)
-
-        n = np.maximum(self.degree + 1, n)
-
-        # Nombre de point d'intégration par direction
-        nbg_xi = n[0]
-        nbg_eta = n[1]
-
-        pxi = 1.0 / nbg_xi
-        peta = 1.0 / nbg_eta
-        xi_g = np.linspace(pxi, 1-pxi, nbg_xi)
-        eta_g = np.linspace(peta, 1-peta, nbg_eta)
-
-        nbf = self.Get_nbf()
-
-        """
-        Calcul des matrices contenant les fonctions de formes évaluée aux 
-        points d'intégrations
-        """
-        phi, _, _, detJ = self.ShapeFunctions(xi_g, eta_g)
-        self.npg = phi.shape[0]
-
-        P = self.Get_P()
-
-        self.wdetJ = np.ones_like(detJ)
-
-        zero = sps.csr_matrix((self.npg, nbf))
-        self.phi = phi
-        self.phix = sps.hstack((phi, zero),  'csc')
-        self.phiy = sps.hstack((zero, phi),  'csc')
-
-        self.pgx = self.phi @ P[:, 0]
-        self.pgy = self.phi @ P[:, 1]
-
-    def InverseBSplineMapping_3D(self, x, y, z, init=None):
+    def InverseBSplineMapping3D(self, x, y, z, init=None, elem=None):
         """ 
         Inverse the BSpline mapping in order to map the coordinates
         of any physical points (x, y, z) to their corresponding position in
-        the parametric space (xi_g, eta_g, zeta_g).
+        the parametric space (xg, yg).
 
         Parameter : 
             m : bspline mesh from pyxel
-            x : x coordinate in physical space
-            y : y coordinate in physical space
-            z : z coordinate in physical space
+            xpix : x coordinate in physical space
+            ypix : y coordinate in physical space
 
         Return :
-            xi_g, eta_g, zeta_g : coordinate in parametric space
+            xg, yg : x coordinate 
         """
 
         # Basis function
         spline = self.Get_spline()
-
+        # P = self.Get_P()
         # Coordinates of controls points
         xn = self.n[:, 0]
         yn = self.n[:, 1]
         zn = self.n[:, 2]
 
         # Initializing  parametric integration points to zero
-        # print("initialisation")
-        if init is None:
-            xi_g = 0 * np.ones_like(x) # 0 * x
-            eta_g = 0 * np.ones_like(y) # 0 * y
-            zeta_g = 0 * np.ones_like(z) # 0 * z
+        if init is None :
+            if elem is None:
+                xi_g = 0 * x
+                eta_g = 0 * y
+                zeta_g = 0 * z
+            
+            else:
+                xi_g = elem.xi[0] * np.ones_like(x)
+                eta_g = elem.eta[0] * np.ones_like(y)
+                zeta_g = elem.zeta[0] * np.ones_like(z)
+            
         else :
-            xi_g = init[0]
+            xi_g =  init[0]
             eta_g = init[1]
             zeta_g = init[2]
-        res = 1
-        #  Newton loop
-        for k in range(7):
-            #print("fct de bases")
-            phi = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0, 0, 0])
-            xp = phi @ xn
-            yp = phi @ yn
-            zp = phi @ zn
-            del phi
+            
+        
 
-            N_xi = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[1, 0, 0])
-            N_eta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0, 1, 0])
-            N_zeta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0, 0, 1])
+        # Newton loop
+        for k in range(7):
+            
+            N = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,0,0])
+            N_xi = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[1,0,0])
+            N_eta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,1,0])
+            N_zeta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,0,1])
 
             J1 = N_xi @ xn
             J4 = N_xi @ yn
@@ -1322,41 +1368,20 @@ class BSplinePatch(object):
             J3 = N_zeta @ xn
             J6 = N_zeta @ yn
             J9 = N_zeta @ zn
+            
             del N_xi, N_eta, N_zeta
-            # J = np.array([dxdxi, dxdeta, dxdzeta,
-            #               dydxi, dydeta, dydzeta,
-            #               dzdxi, dzdeta, dzdzeta]).T          
+       
             """
             J = np.array([[dxdxi, dxdeta, dxdzeta],
                           [dydxi, dydeta, dydzeta],
                           [dzdxi, dzdeta, dzdzeta]]).transpose(2, 0, 1)
             """
-            # J1 = J[:, 0]
-            # J2 = J[:, 1]
-            # J3 = J[:, 2]
-            # J4 = J[:, 3]
-            # J5 = J[:, 4]
-            # J6 = J[:, 5]
-            # J7 = J[:, 6]
-            # J8 = J[:, 7]
-            # J9 = J[:, 8]
+
 
             detJ = J1*J5*J9 + J2*J6*J7 + J4*J8*J3 -\
                 (J3*J5*J7 + J2*J4*J9 + J1*J6*J8)
             
-           
-            # print("Minimum value of |detJ| of bspline", min(np.abs(detJ)))
-            # rep = np.arange(len(detJ))
-            # detJ = detJ[rep]
-            # J1 = J1[rep]
-            # J2 = J2[rep]
-            # J3 = J3[rep]
-            # J4 = J4[rep]
-            # J5 = J5[rep]
-            # J6 = J6[rep]
-            # J7 = J7[rep]
-            # J8 = J8[rep]
-            # J9 = J9[rep]
+
 
             # Applying Sarrus Rules
 
@@ -1373,13 +1398,11 @@ class BSplinePatch(object):
             # invJ = np.array([ComJ1/detJ, ComJ4/detJ, ComJ7/detJ,
             #                  ComJ2/detJ, ComJ5/detJ, ComJ8/detJ,
             #                  ComJ3/detJ, ComJ6/detJ, ComJ9/detJ]).T
-
-            #print("invJ", invJ.shape)
-            # x = x[rep]
-            # y = y[rep]
-            # z = z[rep]
-
-            #print("calcul dxi,deta,dzeta")
+            
+            xp = N @ xn
+            yp = N @ yn
+            zp = N @ zn
+            del N
             dxi_g = (ComJ1 * (x - xp) +\
                 ComJ4 * (y - yp) +\
                 ComJ7 * (z - zp)) / detJ
@@ -1392,43 +1415,130 @@ class BSplinePatch(object):
                 ComJ6 * (y - yp) +\
                 ComJ9 * (z - zp)) / detJ
 
-            #print("calcul res")
-            dx = max((np.max(dxi_g),
-                np.max(deta_g),
-                np.max(dzeta_g)))
-
+            res = np.linalg.norm(x - xp) + \
+                  np.linalg.norm(y - yp) + \
+                  np.linalg.norm(z - zp)
+            
             xi_g = xi_g + dxi_g
             eta_g = eta_g + deta_g
             zeta_g = zeta_g + dzeta_g
-
-            # print("clip")
-            xi_g = np.clip(xi_g, 0, 1)
-            eta_g = np.clip(eta_g, 0, 1)
-            zeta_g = np.clip(zeta_g, 0, 1)
-
-            print(f"Itération {k} | résidu : {dx} | dU/U = {np.linalg.norm(dxi_g) / np.linalg.norm(xi_g)}")
-            # if k == 0:
-            #     xi_p = xi_g
-            #     eta_p = eta_g
-            #     zeta_p = zeta_g
             
-            # else:
-            #     norm_xi = np.linalg.norm(xi_g - xi_p)
-            #     norm_eta = np.linalg.norm(eta_g - eta_p) 
-            #     norm_zeta = np.linalg.norm(zeta_g - zeta_p)
-            #     xi_p = xi_g
-            #     eta_p = eta_g
-            #     zeta_p = zeta_g
+            if elem is None:
+                xi_g = np.clip(xi_g, 0, 1)
+                eta_g = np.clip(eta_g, 0, 1)
+                zeta_g = np.clip(zeta_g, 0, 1)
                 
-            #     res_norm = norm_xi + norm_eta + norm_zeta
-            if dx < 1.0e-6:
-                print(f"Converged with residual {res}")
-                break 
+            else :
+                xi_g = np.clip(xi_g, elem.xi[0], elem.xi[1])
+                eta_g = np.clip(eta_g, elem.eta[0], elem.eta[1])
+                zeta_g = np.clip(zeta_g, elem.zeta[0], elem.zeta[1])
+                
             
-            if k==6:
-                print(f"Max iter reached, residual : {res}")
+
+
+            # dx = max((np.max(dxi_g),
+            #     np.max(deta_g),
+            #     np.max(dzeta_g)))
+
+
+
+            print(f"Itération {k} | résidu : {res}")
+            if res < 1.0e-6:
+                break            
 
         return xi_g, eta_g, zeta_g
+
+
+
+
+    def DVCIntegrationPixelElem(self, f, m, cam, P=None):
+        
+        if P is None :
+            P = self.Get_P()
+        
+        spline = self.Get_spline()
+        
+        xi_glob = np.empty(0)
+        eta_glob = np.empty(0)
+        zeta_glob = np.empty(0)
+        
+        phi = np.empty(0)
+        
+        for key in m.e:
+            
+            e = m.e[key]
+            print(f"\nÉlément {key}")
+            
+            N_pix = self.compute_largest_edge(cam, e)
+            
+            xi = np.linspace(e.xi[0], e.xi[1], N_pix)
+            eta = np.linspace(e.eta[0], e.eta[1], N_pix)
+            zeta = np.linspace(e.zeta[0], e.zeta[1], N_pix)
+            
+            N = spline.DN([xi, eta, zeta], k=[0, 0, 0])
+            
+            u, v, w = cam.P(N @ P[:, 0], N @ P[:, 1], N @ P[:, 2])
+            del N
+            ur = np.round(u).astype('uint16')
+            vr = np.round(v).astype('uint16')
+            wr = np.round(w).astype('uint16')
+            del u, v, w
+            Nx = f.pix.shape[0]
+            Ny = f.pix.shape[1]
+            Nz = f.pix.shape[2]
+            
+            idpix = np.ravel_multi_index((ur, vr, wr), (Nx, Ny, Nz))
+            _, rep = np.unique(idpix, return_index=True)
+            del idpix
+            ur = ur[rep]
+            vr = vr[rep]
+            wr = wr[rep]
+            
+            
+            param = np.meshgrid(xi, eta, zeta, indexing='ij')
+            xi_init = param[0].ravel()[rep]
+            eta_init = param[1].ravel()[rep]
+            zeta_init = param[2].ravel()[rep]
+            del param
+            init = [xi_init, eta_init, zeta_init]
+            xg, yg, zg = cam.Pinv(ur.astype(float), vr.astype(float), wr.astype(float))
+        
+            xi, eta, zeta = self.InverseBSplineMapping3D(xg, yg, zg, init=init, elem=e) 
+            del xg, yg, zg, init
+      
+            select = (xi > e.xi[0]) & (xi < e.xi[1]) &\
+                 (eta > e.eta[0]) & (eta < e.eta[1]) &\
+                 (zeta > e.zeta[0]) & (zeta < e.zeta[1])
+            
+            xi = xi[select]
+            eta = eta[select]
+            zeta = zeta[select]
+            
+            phi_loc = spline.DN(np.array([xi, eta, zeta]), k=[0,0,0])
+            phi = np.hstack((phi, phi_loc))
+            
+            
+            # xi_glob = np.hstack((xi_glob, xi))
+            # eta_glob = np.hstack((eta_glob, eta))
+            # zeta_glob = np.hstack((zeta_glob, zeta))
+            
+        # phi = spline.DN(np.array([xi_glob, eta_glob, zeta_glob]), k=[0,0,0])
+        
+        self.npg = phi.shape[0]
+        self.wdetJ = np.ones_like(xi_glob)
+        nbf = self.Get_nbf()
+        zero = sps.csr_matrix((self.npg, nbf))
+        self.phi = phi
+        """
+        self.phix = sps.hstack((phi, zero, zero),  'csc')
+        self.phiy = sps.hstack((zero, phi, zero),  'csc')
+        self.phiy = sps.hstack((zero, phi, zero),  'csc')
+        """
+        self.pgx = phi @ P[:, 0]
+        self.pgy = phi @ P[:, 1]
+        self.pgz = phi @ P[:, 2]    
+        
+
 
     def DVCIntegrationPixel(self, f, cam, ninte=None, P=None):
         """
@@ -1549,7 +1659,6 @@ class BSplinePatch(object):
         self.pgz = phi @ P[:, 2]
         
         return init
- 
 
     def DVCIntegration(self, n=None, P=None):
         #  DVC integration: build of the global differential operators
