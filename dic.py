@@ -33,22 +33,22 @@ m = BSplinePatch(ctrlPts, degree, knotVect)
 m.KnotInsertion([newt, newr])
 
 
-# e = m.Init_elem_2D()
-# %%
-areas = m.compute_elem_area(cam)
-m.GaussIntegration([1,1])
-
 # %%
 m.Connectivity()
-m.DICIntegrationPixel(f, m, cam)
-
-u, v = cam.P(m.pgx, m.pgy)
-px.PlotMeshImage(f, m, cam)
-plt.scatter(v, u)
-
-
 U = px.MultiscaleInit(f, g, m, cam, scales=[3, 2, 1])
+
+
+m.DICIntegrationPixelElem(f, cam)
+
+# xi, eta = m.InverseBSplineMapping(m.pgx, m.pgy)
+# plt.plot(xi, eta, 'k.')
+# plt.axis('equal')
 U, res = px.Correlate(f, g, m, cam, U0=U)
+
+# u, v = cam.P(m.pgx, m.pgy)
+# px.PlotMeshImage(f, m, cam)
+# plt.scatter(v, u)
+
 
 m.Plot(U, alpha=0.5)
 m.Plot(U=3*U)
