@@ -21,6 +21,10 @@ from pyxel.mesher import StructuredMeshQ4
 import bsplyne as bs
 import pyxel as px
 import time
+try :
+    from mpi4py import MPI
+except :
+    print('mpi4py is not installed')
 # %%
 
 
@@ -53,7 +57,9 @@ class BSplinePatch(object):
         """
         self.dim = ctrlPts.shape[0]
         self.ctrlPts = ctrlPts
-        self.n = self.CtrlPts2N()
+        n = self.CtrlPts2N()
+        self.n = n
+        del n
         self.degree = np.array(degree)
         self.knotVect = knotVect
         self.spline = bs.BSpline(self.degree, self.knotVect)
@@ -84,9 +90,9 @@ class BSplinePatch(object):
         """ Attributes when using vectorization  """
         """ In this case, the implicit connectivity of the structured B-spline parametric space is used """
         self.npg = 0
-        # self.phix = np.empty(0)      # Matrix (N,0)
-        # self.phiy = np.empty(0)      # Matrix (0,N)
-        #self.phiz = np.empty(0)      # Matrix ?????
+        self.phix = 0      # Matrix (N,0)
+        self.phiy = 0      # Matrix (0,N)
+        self.phiz = 0     # Matrix ?????
 
         self.dphix = np.empty(0)
         self.dphiy = np.empty(0)
@@ -316,7 +322,7 @@ class BSplinePatch(object):
     def CtrlPts2N(self, ctrlPts=None):
         if ctrlPts is None:
             ctrlPts = self.ctrlPts.copy()
-
+        
         if self.dim == 2:
             n = np.c_[ctrlPts[0].ravel(),
                       ctrlPts[1].ravel()]
@@ -325,6 +331,7 @@ class BSplinePatch(object):
             n = np.c_[ctrlPts[0].ravel(),
                       ctrlPts[1].ravel(),
                       ctrlPts[2].ravel()]
+        # n = np.unique(n, axis=0)
         return n
 
     def N2CtrlPts(self, n=None):
@@ -343,7 +350,7 @@ class BSplinePatch(object):
 
         return ctrlPts
 
-    def saveParaview(self):
+    def saveParaview(self, fname, cam=None, U=None):
         """
         Save a pvd file corresponding to the bspline mesh
 
@@ -353,8 +360,15 @@ class BSplinePatch(object):
         """
         
         spline = self.Get_spline()
-        
-        spline.saveParaview(self.ctrlPts, ".", "bspline")
+        if U is None:
+            spline.saveParaview(self.ctrlPts, ".", fname)
+        else:
+            U = U.reshape(3,-1)
+            U = np.array(cam.P(*U))
+            Ures = U.reshape((1,*self.N2CtrlPts().shape))
+            D = {"U" : Ures}
+            spline_def = self.Get_spline()
+            spline_def.saveParaview(self.N2CtrlPts(), './', 'deformed', fields=D)
 
 
     def Plot(self, U=None, n=None, neval=None, **kwargs):
@@ -373,90 +387,77 @@ class BSplinePatch(object):
             U = np.zeros(self.dim*nbf)
         U = U.reshape((self.dim, -1))
 
-        if self.dim == 3:
-            try:
-                import k3d
-            except:
-                raise Exception("k3d is not installed")
-            spline = bs.BSpline(self.degree, self.knotVect)
-            ctrl_pts = self.ctrlPts
-            save = "/tmp/stl_mesh.stl"
-            mesh = make_stl_mesh(spline, ctrl_pts)
-            mesh.save(save)
-            with open(save, 'rb') as stl:
-                data = stl.read()
 
-            x = self.ctrlPts[0].ravel()
-            y = self.ctrlPts[1].ravel()
-            z = self.ctrlPts[2].ravel()
+        Pxm = n[:, 0] + U[0]
+        Pym = n[:, 1] + U[1]
+        """
+        xi = np.linspace(
+            self.knotVect[0][self.degree[0]], self.knotVect[0][-self.degree[0]], neval[0])
+        eta = np.linspace(
+            self.knotVect[1][self.degree[1]], self.knotVect[1][-self.degree[1]], neval[1])
 
-            plt_points = k3d.points(positions=np.array([x, y, z]).T,
-                                    point_size=0.2,
-                                    shader='3d',
-                                    color=0x3f6bc5)
+        # Iso parameters for the elemnts
+        xiu = np.unique(self.knotVect[0])
+        etau = np.unique(self.knotVect[1])
 
-            plot = k3d.plot()
-            plot += k3d.stl(data)
-            plot += plt_points
-            plot.display()
-
-        elif self.dim == 2:
-            Pxm = n[:, 0] + U[0]
-            Pym = n[:, 1] + U[1]
-
-            xi = np.linspace(
-                self.knotVect[0][self.degree[0]], self.knotVect[0][-self.degree[0]], neval[0])
-            eta = np.linspace(
-                self.knotVect[1][self.degree[1]], self.knotVect[1][-self.degree[1]], neval[1])
-
-            # Iso parameters for the elemnts
-            xiu = np.unique(self.knotVect[0])
-            etau = np.unique(self.knotVect[1])
-
-            # Basis functions
-            spline = bs.BSpline(self.degree, self.knotVect)
+        # Basis functions
+        spline = bs.BSpline(self.degree, self.knotVect)
             
-            if self.degree.shape[0] == 3:
-                zeta = np.array([0])
-                phi1 = spline.DN([xiu, eta, zeta], k=[0, 0, 0])
-                phi2 = spline.DN([xi, etau, zeta], k=[0, 0, 0])
-                
-            else:
-                phi1 = spline.DN([xiu, eta], k=[0, 0])
-                phi2 = spline.DN([xi, etau], k=[0, 0])
-                
+        phi1 = spline.DN([xiu, eta], k=[0, 0])
+        phi2 = spline.DN([xi, etau], k=[0, 0])
+            
 
-            #xe, ye1 = spline(self.ctrlPts)
-            xe1 = phi1.dot(Pxm)
-            ye1 = phi1.dot(Pym)
-            xe2 = phi2.dot(Pxm)
-            ye2 = phi2.dot(Pym)
+        #xe, ye1 = spline(self.ctrlPts)
+        xe1 = phi1.dot(Pxm)
+        ye1 = phi1.dot(Pym)
+        xe2 = phi2.dot(Pxm)
+        ye2 = phi2.dot(Pym)
 
-            xe1 = xe1.reshape((xiu.size, neval[1]))
-            ye1 = ye1.reshape((xiu.size, neval[1]))
-            xe2 = xe2.reshape((neval[0], etau.size))
-            ye2 = ye2.reshape((neval[0], etau.size))
+        xe1 = xe1.reshape((xiu.size, neval[1]))
+        ye1 = ye1.reshape((xiu.size, neval[1]))
+        xe2 = xe2.reshape((neval[0], etau.size))
+        ye2 = ye2.reshape((neval[0], etau.size))
 
-            for i in range(xiu.size):
-                # loop on xi
-                # Getting one eta iso-curve
-                plt.plot(xe1[i, :], ye1[i, :], color=edgecolor,
-                         alpha=alpha, **kwargs)
+        for i in range(xiu.size):
+            # loop on xi
+            # Getting one eta iso-curve
+            plt.plot(xe1[i, :], ye1[i, :], color=edgecolor,
+                     alpha=alpha, **kwargs)
 
-            for i in range(etau.size):
-                # loop on eta
-                # Getting one xi iso-curve
-                plt.plot(xe2[:, i], ye2[:, i], color=edgecolor,
-                         alpha=alpha, **kwargs)
-            plt.plot(Pxm, Pym, color=edgecolor,
-                     alpha=alpha, marker='o', linestyle='')
-            plt.axis('equal')
-            plt.show()
+        for i in range(etau.size):
+            # loop on eta
+            # Getting one xi iso-curve
+            plt.plot(xe2[:, i], ye2[:, i], color=edgecolor,
+                     alpha=alpha, **kwargs)
+        """
+        plt.plot(Pxm, Pym, color=edgecolor,
+                 alpha=alpha, marker='o', linestyle='')
+        plt.axis('equal')
+        plt.show()
 
+    def _init_cube(self, neval=50):
+        
+        if type(neval) == int:
+            neval = np.array([neval, neval, neval])
+        
+        x = np.linspace(0, 1, neval[0]) 
+        y = np.linspace(0, 1, neval[1])
+        z = np.linspace(0, 1, neval[2])
+        meshgrid = np.meshgrid(x, y, z, indexing='ij') 
+        coordonnees_surface_cube = []
+        for i in range(len(x)):
+           for j in range(len(y)):
+               for k in range(len(z)):
+                   if i == 0 or i == len(x) - 1 or j == 0 or j == len(y) - 1 or k == 0 or k == len(z) - 1:
+                       coordonnees_surface_cube.append((meshgrid[0][i, j, k], meshgrid[1][i, j, k], meshgrid[2][i, j, k]))
+
+        return np.array(coordonnees_surface_cube)
+    
     def Plot3D(self, n=None, neval=None, U=None, **kwargs):
         
+        
         if neval == None:
-            neval = [30, 30, 30]
+            neval = [50, 50, 50]
         alpha = kwargs.pop("alpha", 1)
         edgecolor = kwargs.pop("edgecolor", "k")
         nbf = self.Get_nbf()
@@ -469,7 +470,20 @@ class BSplinePatch(object):
         Pxm = n[:, 0] + U[0]
         Pym = n[:, 1] + U[1]
         Pzm = n[:, 2] + U[2]
-    
+        
+        coord = self._init_cube(neval=neval).T
+        spline = self.Get_spline()
+        N = spline.DN(coord, k=[0,0,0])
+        x = N @ Pxm
+        y = N @ Pym
+        z = N @ Pzm
+        
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(x.T, y.T, z.T)
+        plt.show()
+        
+    """
         xi = np.linspace(
             self.knotVect[0][self.degree[0]], self.knotVect[0][-self.degree[0]], neval[0])
         eta = np.linspace(
@@ -511,6 +525,8 @@ class BSplinePatch(object):
         ye3 = ye3.reshape((neval[0], neval[1], zetau.size))
         ze3 = ze3.reshape((neval[0], neval[1], zetau.size))
     
+        
+    
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
         for i in range(xiu.size):
@@ -538,6 +554,7 @@ class BSplinePatch(object):
         ax.set_zlabel('z')
         ax.scatter(Pxm, Pym, Pzm, c=edgecolor)
         plt.show()
+        """
     
 
 
@@ -589,9 +606,7 @@ class BSplinePatch(object):
         #     m.GaussIntegration()
         # else:
         #     m = self
-        print(f"SHAPE DPHIXDX : {self.dphixdx.shape}")
         if self.dphixdx.shape[0] == 0:
-            print("LAPLACIAN : Gauss Integration")
             m2 = self.Copy()
             m2.GaussIntegration()
         else:
@@ -617,7 +632,6 @@ class BSplinePatch(object):
                 m2.dphiydx.T @ wdetJ @ m2.dphiydx
 
             
-        print(f"LAPLACIAN SHAPE : {L.shape}")
         return L
 
     def DoubleLaplacian(self):
@@ -864,7 +878,7 @@ class BSplinePatch(object):
                     (eta_g == np.clip(eta_g, 0, 1))
                 
                 xi_g = xi_g[select]
-                eta_g = xi_g[select]
+                eta_g = eta_g[select]
                 
                 # xi_g = np.clip(xi_g, 0, 1)
                 # eta_g = np.clip(eta_g, 0, 1)
@@ -1365,6 +1379,8 @@ class BSplinePatch(object):
         xn = self.n[:, 0]
         yn = self.n[:, 1]
         zn = self.n[:, 2]
+        
+        nan = float('nan')
         # Initializing  parametric integration points to zero
         if init is None :
             if elem is None:
@@ -1468,20 +1484,27 @@ class BSplinePatch(object):
 
             if elem is None:
                 
-                select = (xi_g == np.clip(xi_g, 0, 1)) &\
-                    (eta_g == np.clip(eta_g, 0, 1)) &\
-                    (zeta_g == np.clip(zeta_g, 0, 1))
+                if k < 1:
+                    select = (xi_g == np.clip(xi_g, 0, 1)) &\
+                        (eta_g == np.clip(eta_g, 0, 1)) &\
+                        (zeta_g == np.clip(zeta_g, 0, 1))
+                    
+                    xi_g = xi_g[select]
+                    eta_g = xi_g[select]
+                    zeta_g = zeta_g[select]
+                    
+                    x = x[select]
+                    y = y[select]
+                    z = z[select]
                 
-                xi_g = xi_g[select]
-                eta_g = xi_g[select]
-                zeta_g = zeta_g[select]
-                # xi_g = np.clip(xi_g, 0, 1)
-                # eta_g = np.clip(eta_g, 0, 1)
-                # zeta_g = np.clip(zeta_g, 0, 1)
-                
+                else :
+                    xi_g = np.clip(xi_g, 0, 1)
+                    eta_g = np.clip(eta_g, 0, 1)
+                    zeta_g = np.clip(zeta_g, 0, 1)
+                    
             else :
                 
-                if k <= 2:
+                if k < 1:
                     xi_g = np.clip(xi_g, elem.xi[0], elem.xi[1])
                     eta_g = np.clip(eta_g, elem.eta[0], elem.eta[1])
                     zeta_g = np.clip(zeta_g, elem.zeta[0], elem.zeta[1])
@@ -1489,7 +1512,10 @@ class BSplinePatch(object):
                     
                     select = (xi_g == np.clip(xi_g, elem.xi[0], elem.xi[1])) &\
                         (eta_g == np.clip(eta_g, elem.eta[0], elem.eta[1])) &\
-                        (zeta_g == np.clip(zeta_g, elem.zeta[0], elem.zeta[1]))
+                        (zeta_g == np.clip(zeta_g, elem.zeta[0], elem.zeta[1])) 
+                    # select = (xi_g > 0) & (xi_g < 1) &\
+                    #         (eta_g > 0) & (eta_g < 1) &\
+                    #         (zeta_g > 0) & (zeta_g < 1) 
                     
                     xi_g = xi_g[select]
                     eta_g = eta_g[select]
@@ -1498,7 +1524,7 @@ class BSplinePatch(object):
                     x = x[select]
                     y = y[select]
                     z = z[select]
-            print(f"Itération {k} | résidu : {res}")
+            # print(f"Itération {k} | résidu : {res}")
             
             if res < 1.0e-3 or np.math.isnan(res):
                 break            
@@ -1508,7 +1534,7 @@ class BSplinePatch(object):
 
 
 
-    def DVCIntegrationPixelElem(self, f, cam, P=None):
+    def DVCIntegrationPixel(self, f, cam, P=None):
         
         if P is None :
             P = self.Get_P()
@@ -1519,7 +1545,6 @@ class BSplinePatch(object):
         # eta_glob = np.empty(0)
         # zeta_glob = np.empty(0)  
         for key in self.e:
-            
             e = self.e[key]
             print(f"\nÉlément {key} :")
             
@@ -1527,7 +1552,7 @@ class BSplinePatch(object):
             N_eval = self.compute_largest_edge(cam, e)
             
             # Inflating the number of eval point to ensure to have all pixels
-            N_eval = int(N_eval * 1.1)
+            N_eval = int(N_eval)
             print(f"N_eval = {N_eval ** 3}")
             
             # Setting the eval points to find all pxel center
@@ -1572,7 +1597,7 @@ class BSplinePatch(object):
             # Inversing Bspline Mapping
             xi, eta, zeta = self.InverseBSplineMapping3D(xg, yg, zg, init=init, elem=e) 
             del xg, yg, zg, init
-            
+            """
             # Keeping the point which are not on the element bordrer
             select = (xi > e.xi[0]) & (xi < e.xi[1]) &\
                  (eta > e.eta[0]) & (eta < e.eta[1]) &\
@@ -1582,7 +1607,7 @@ class BSplinePatch(object):
             eta = eta[select]
             zeta = zeta[select]
             del select
-            
+            """
             # Evaluating shape functions on the integration points 
             phi_loc = spline.DN(np.array([xi, eta, zeta]), k=[0,0,0])
             del xi, eta, zeta
@@ -1593,7 +1618,6 @@ class BSplinePatch(object):
                 
             else :
                 phi = sps.vstack((phi, phi_loc))
-            
             # xi_glob = np.hstack((xi_glob, xi))
             # eta_glob = np.hstack((eta_glob, eta))
             # zeta_glob = np.hstack((zeta_glob, zeta))
@@ -1621,13 +1645,13 @@ class BSplinePatch(object):
         self.pgz = self.phi @ P[:, 2]  
 
 
-
     def DVCIntegration(self, n=None, P=None):
         #  DVC integration: build of the global differential operators
         if hasattr(n, 'rz'):
             # if n is a camera then n is autocomputed
             n = self.GetApproxElementSize(n)
         if type(n) == int:
+            n *= 2
             n = np.array([n, n, n], dtype=int)
 
         nbg_xi = n[0]
@@ -1671,9 +1695,7 @@ class BSplinePatch(object):
         spline = self.Get_spline()
         self.phi = spline.DN([xi, eta, zeta], k=[0,0, 0])
         self.npg = self.phi.shape[0]
-
-
-        self.wdetJ = np.ones_like(self.phi.shape[0])
+        self.wdetJ = np.ones(self.phi.shape[0])
         # Integration weights + measures + Jacobian of the transformation
         #nbf = self.Get_nbf()
         #zero = sps.csr_matrix((self.npg, nbf))
@@ -1794,6 +1816,18 @@ class BSplinePatch(object):
         V = np.zeros(self.ndof)
         V[self.conn[:, 0]] = np.cos(self.n[:, 1] / T * 2 * np.pi)
         return V
+    
+    def RemoveDoubleNodes(self):
+        """
+        Removes the double nodes thus changes connectivity
+        Warning: both self.e and self.n are modified!
+
+        Usage :
+            m.RemoveDoubleNodes()
+
+        """
+        nnew = np.unique(self.n, axis=0)
+        self.n = nnew
 
 
 def Rectangle(roi, n_elems, degree):
