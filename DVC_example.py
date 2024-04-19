@@ -26,8 +26,8 @@ import pyxel as px
 # %%
 plot_figs = False
 
-refname = 'dataset_0_binning4.npy'
-defname = 'dataset_1_binning4.npy'
+refname = 'Images/dataset_0_binning2.npy'
+defname = 'Images/dataset_1_binning2.npy'
 f = px.Volume(refname).Load()
 if plot_figs:
     print(f.pix.shape)
@@ -35,7 +35,7 @@ if plot_figs:
     f.VTKImage('RefVol')
 
 
-m = px.ReadMesh('conform_mesh_coarse.vtk', 3)
+m = px.ReadMesh('mesh/conform_mesh_coarse.vtk', 3)
 m.KeepVolElems()
 
 if plot_figs:
@@ -54,10 +54,10 @@ f = px.Volume(refname).Load()
 g = px.Volume(defname).Load()
 f.BuildInterp()
 g.BuildInterp()
-U0 = px.MultiscaleInit(f, g, m, cam, scales=[2, 1], direct=False)
+U0 = px.MultiscaleInit(f, g, m, cam, scales=[3, 2, 1], direct=False)
 
 # %% RUN
-m.DVCIntegration(5)
+m.DVCIntegration(10)
 L = m.Laplacian()
 U, res = px.Correlate(f, g, m, cam, U0=U0, l0=15, L=L, direct=False)
 
