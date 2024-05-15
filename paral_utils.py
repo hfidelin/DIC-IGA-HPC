@@ -47,12 +47,12 @@ def _compute_phi_pixel(m, f, cam, m2=None, P=None):
         m2 = m
     
     if P is None :
-        P2 = m2.Get_P()
+        P2 = m2.n
     
     spline2 = m2.Get_spline()
     spline = m.Get_spline()
     
-    keys = list(m2.e.keys())
+    keys = list(m2.elem.keys())
     if rank == 0 :
         sendbuf = np.array_split(keys, size)
     else:
@@ -63,7 +63,7 @@ def _compute_phi_pixel(m, f, cam, m2=None, P=None):
     # print(f"Rank {rank} | {local_keys}")
     for key in local_keys:
         
-        e = m2.e[key]
+        e = m2.elem[key]
         # print(f"\nÉlément {key} :")
         
         # Compute largest eedge of the element
@@ -157,26 +157,24 @@ def _compute_phi_pixel(m, f, cam, m2=None, P=None):
 
 
 
+
 def _compute_phi(m, f, cam, m2=None, P=None):
     
     comm = PETSc.COMM_WORLD
     size = comm.Get_size()
     rank = comm.Get_rank()
     
-    
-    
-    
 
     if m2 is None:
         m2 = m
     
     if P is None :
-        P2 = m2.Get_P()
+        P2 = m2.n
     
     spline2 = m2.Get_spline()
     spline = m.Get_spline()
     
-    keys = list(m2.e.keys())
+    keys = list(m2.elem.keys())
     
     list_keys = np.array_split(keys, size)
     
@@ -184,7 +182,7 @@ def _compute_phi(m, f, cam, m2=None, P=None):
     progress_bar = tqdm(total=len(local_keys), desc=f"Process {rank}", position=rank)
     for key in local_keys:
         
-        e = m2.e[key]
+        e = m2.elem[key]
         
         # Compute largest eedge of the element
         N_eval = m.compute_largest_edge(cam, e)
@@ -248,7 +246,8 @@ def _compute_phi(m, f, cam, m2=None, P=None):
         progress_bar.update(1)
     # print(f"Rank {rank} phi loc shape : {phi_loc.shape}")
     progress_bar.close() 
-    
+    comm.barrier()
+    # print(f"Rank {rank} j'ai fini la boucle")
     
     
     sendbuf = np.array(phi_loc.shape[0], dtype='int64')
@@ -263,16 +262,43 @@ def _compute_phi(m, f, cam, m2=None, P=None):
     row_phi = phi_loc.indptr
     col_phi = phi_loc.indices
     data_phi = phi_loc.data
-    phi_glob = PETSc.Mat()
-    # print(f"Rank {rank} : {row_phi}")
-    # print(f"Rank {rank} : {col_phi}")
-    # print(f"Rank {rank} : {data_phi}")
-    phi_glob.setValuesLocalCSR(row_phi, col_phi, data_phi, addv=None)
-    # phi_glob.createAIJWithArrays(((PETSc.DECIDE, shape_i), (PETSc.DECIDE, shape_j)),
-    #                              (row_phi, col_phi, data_phi), comm=comm)
+    print(f"Rank {rank} : je créer la matrice globale")
+    phi_glob = PETSc.Mat().create()
+    print(f"Rank {rank} : je setSizes")
+    phi_glob.setSizes(((phi_loc.shape[0], shape_i), (PETSc.DECIDE, shape_j)))
+    print(f"Rank {rank} : je setType")
+    phi_glob.setType(PETSc.Mat.Type.AIJ) 
+    print(f"Rank {rank} : je setValuesCSR")
+    #phi_glob.setValuesCSR(row_phi, col_phi, data_phi, addv=True)
+    progress_bar = tqdm(total=phi_loc.nnz, desc=f"Process {rank}", position=rank)
+    for i in range(phi_loc.nnz):
+        p = phi_loc[i]
+        row, col, val = sps.find(p)
+        phi_glob.setValue(row[0], col[0], val[0], addv=True)
+        progress_bar.update(1)
+    progress_bar.close()     
+        
+    print(f"Rank {rank} : je assembleBeggin")
+    phi_glob.assemblyBegin()
+    print(f"Rank {rank} : je AssembleEnd")
+    phi_glob.assemblyEnd()
+    
+    print(f"Rank {rank} : j'ai fini de construire phi glob")
+    if rank == 0:
+        print(f"2")
+    # Creates a binary file 
+    viewer = PETSc.Viewer().createBinary('matrix-phi.dat', 'w', comm=PETSc.COMM_WORLD)
+    viewer(phi_glob)
+    
+    if rank == 0:
+        viewer_bis = PETSc.Viewer().createBinary('matrix-phi.dat', 'r', comm=PETSc.COMM_SELF)
+        phi_glob_bis = PETSc.Mat().load(viewer_bis)
+        phi_glob_bis.viewFromOptions('-phi')
+        ai, aj, av = phi_glob_bis.getValuesCSR()
+        phi_sp = sps.csr_matrix((av, aj, ai))
     # phi_glob.createIS(((PETSc.DECIDE, shape_i), (PETSc.DECIDE, shape_j)), comm=comm)
     # phi_glob.setISLocalMat(phi_loc)
     comm.barrier()
     if rank == 0:
-        return phi_glob
+        return phi_sp
 

@@ -30,7 +30,7 @@ try :
 except :
     print('mpi4py is not installed')
 
-# from paral_utils import _compute_phi_pixel
+
 # %%
 
 
@@ -43,6 +43,14 @@ class Elem_2D:
         self.mes_xi = self.xi[1] - self.xi[0]
         self.mes_eta = self.eta[1] - self.eta[0]
         
+        self.wdetJ = 0
+        
+        self.xig = 0
+        self.etag = 0
+        
+        self.pgx = 0
+        self.pgy = 0
+        
 class Elem_3D:
     def __init__(self, xi, eta, zeta, num):
         
@@ -54,21 +62,36 @@ class Elem_3D:
         self.mes_eta = self.eta[1] - self.eta[0]
         self.mes_zeta = self.zeta[1] - self.zeta[0]
         
+        self.wdetJ = 0
+        
+        self.xig = 0
+        self.etag = 0
+        self.zetag = 0
+        
+        self.pgx = 0
+        self.pgy = 0
+        self.pgz = 0
+        
         
 class BSplinePatch(object):
-    def __init__(self, ctrlPts, degree, knotVect):
+    def __init__(self, e, n, degree, knotVect):
         """
         Nurbs surface from R^2 (xi,eta)--->R^2 (x,y) 
         ctrlPts = [X,Y] or ctrlPts = [X,Y,Z]
         """
-        self.dim = ctrlPts.shape[0]
-        self.ctrlPts = ctrlPts
-        n = self.CtrlPts2N()
+        self.dim = n.shape[1]
+        # self.ctrlPts = ctrlPts
+        # n = self.CtrlPts2N()
         self.n = n
-        del n
+        self.e = e
+        self.dof = n
+        self.ndof = 0
+        self.conn = []
         self.degree = np.array(degree)
         self.knotVect = knotVect
         self.spline = bs.BSpline(self.degree, self.knotVect)
+        self.nbf = self.spline.getNbFunc()
+
 
         self.ien = 0              # NURBS Connectivity p-uplet (IENu,IENv)
         # Connectivity: Control Point number (column) of each element (line)
@@ -89,10 +112,15 @@ class BSplinePatch(object):
         
         # Dictionary containing the element of the bspline mesh
         if self.dim == 2:
-            self.e = self.Init_elem_2D()
+            self.elem = self.Init_elem_2D()
         elif self.dim == 3:
-            self.e = self.Init_elem_3D()
-
+            self.elem = self.Init_elem_3D()
+            
+        # self.C = self.Connectivity_Matrix()
+        self.nelem = 0
+        # self.n_knots = self.Init_n_knots()
+        # self.e_knots = {0 : np.arange(self.n_knots.shape[0])}
+        
         """ Attributes when using vectorization  """
         """ In this case, the implicit connectivity of the structured B-spline parametric space is used """
         self.npg = 0
@@ -122,7 +150,6 @@ class BSplinePatch(object):
         self.pgz = np.empty(0)
 
         self.phiMatrix = 0
-        self.n_elems = 0
         self.pix = 0
         self.piy = 0
         self.piz = 0
@@ -138,31 +165,45 @@ class BSplinePatch(object):
         self.refGaussTriangle = 0
 
     def Copy(self):
-        m = BSplinePatch(self.ctrlPts.copy(), self.degree.copy(),
+        m = BSplinePatch(self.e.copy(), self.n.copy(), self.degree.copy(),
                          self.knotVect.copy())
         m.conn = self.conn.copy()
+        m.dof = self.dof.copy()
         m.ndof = self.ndof
         m.dim = self.dim
         m.npg = self.npg
         m.pgx = self.pgx.copy()
         m.pgy = self.pgy.copy()
         m.pgz = self.pgz.copy()
+        m.phi = self.phi.copy()
         # m.phix = self.phix.copy()
         #m.phiy = self.phiy.copy()
         # m.phiz = self.phiy.copy()
+        m.dphixdx = self.dphixdx.copy()
+        m.dphixdy = self.dphixdy.copy()
+        m.dphixdz = self.dphixdz.copy()
+        
+        m.dphiydx = self.dphiydx.copy()
+        m.dphiydy = self.dphiydy.copy()
+        m.dphiydz = self.dphiydz.copy()
+        
+        m.dphizdx = self.dphizdx.copy()
+        m.dphizdy = self.dphizdy.copy()
+        m.dphizdz = self.dphizdz.copy()
         m.wdetJ = self.wdetJ.copy()
+        # m.C = self.C.copy()
         return m
 
     def IsRational(self):
-        return (self.ctrlPts[3] != 1).any()
+        ctrlPts = self.N2CtrlPts()
+        return (ctrlPts[3] != 1).any()
 
 
-    # def _read(fname):
-        
 
     def Get_nbf_1d(self):
         """ Get the number of basis functions per parametric direction """
-        return self.ctrlPts.shape[1:]
+        ctrlPts = self.N2CtrlPts()
+        return ctrlPts.shape[1:]
 
     def Get_nbf(self):
         """ Total number of basis functions """
@@ -178,20 +219,6 @@ class BSplinePatch(object):
         """ Indices of elements """
         return np.arange(self.ien[0].shape[1]*self.ien[1].shape[1])
 
-    def Get_P(self):
-        """  Returns the total"""
-        if self.dim == 2:
-            P = np.c_[self.ctrlPts[0].ravel(),
-                      self.ctrlPts[1].ravel()]
-
-        elif self.dim == 3:
-            P = np.c_[self.ctrlPts[0].ravel(),
-                      self.ctrlPts[1].ravel(),
-                      self.ctrlPts[2].ravel()]
-        return P
-
-    def Get_spline(self):
-        return bs.BSpline(self.degree, self.knotVect)
 
     def Init_elem_2D(self):
         """
@@ -217,6 +244,7 @@ class BSplinePatch(object):
                 e[n] = Elem_2D(xi, eta, n)
                 n += 1              
         
+        self.nelem = n
         return e
     
     def Init_elem_3D(self):
@@ -233,6 +261,7 @@ class BSplinePatch(object):
         xiu = np.unique(self.knotVect[0])
         etau = np.unique(self.knotVect[1])
         zetau = np.unique(self.knotVect[2])
+        self.nelem = (xiu.shape[0]-1) * (etau.shape[0]-1) * (zetau.shape[0]-1)
         n = 0
         for i in range(xiu.shape[0]-1):
             xi = np.array([xiu[i], xiu[i+1]])
@@ -243,114 +272,126 @@ class BSplinePatch(object):
                     zeta = np.array([zetau[k], zetau[k+1]])
                     e[n] = Elem_3D(xi, eta, zeta, n)
                     n += 1              
-            
+           
         return e    
     
+    
+    
+    def Init_n_knots(self):
+        
+        
+        n_knots = np.empty(self.dim)
+        
+        spline = self.Get_spline()
+        P = self.n
+        for key in self.elem.keys():
+            
+            elem = self.elem[key]
+            
+            for i in range(2):
                 
+                N = spline.DN(np.array([elem.xi[i], elem.eta[i], elem.zeta[i]]))
+                xk, yk, zk = N @ P [:, 0], N @ P [:, 1], N @ P [:, 2]
+                n_knots = np.vstack((n_knots, np.array([xk, yk, zk]).T))
+                # self.n_knots.append(np.array([xk, yk, zk]))
+         
+        
+        return n_knots
+            
+  
 
-    def SelectNodes(self, n=-1):
-        """
-        Selection of nodes by hand in a mesh.
-        """
-        plt.figure()
-        self.Plot()
-        figManager = plt.get_current_fig_manager()
-        if hasattr(figManager.window, 'showMaximized'):
-            figManager.window.showMaximized()
+    # def _get_e(self):
+    #     """
+    #     Generate a list that number the control points
+
+    #     Returns
+    #     -------
+    #     p : ndarray.
+
+    #     """
+        
+    #     nu, ind = np.unique(self.n, axis=0, return_index=True)
+    #     nu = nu[np.argsort(ind)]
+    #     e = np.zeros(self.n.shape[0])
+    #     for i in range(len(self.n)):
+            
+    #         for j in range(len(nu)):
+    #             if (self.n[i] == nu[j]).all():
+    #                 index = j
+              
+    #         e[i] = index
+
+    #     return e
+
+    def Connectivity(self):
+        print("Connectivity.")
+        # used_nodes = np.zeros(0, dtype=int)
+        # for je in self.e.keys():
+        #     used_nodes = np.unique(np.append(used_nodes, self.e[je].ravel()))
+        # nn = len(used_nodes)
+        nn = len(self.n)
+        self.ndof = nn * self.dim
+        # self.conn = -np.ones(self.dof.shape[0], dtype=int)
+        # self.conn[used_nodes] = np.arange(nn)
+        self.conn = np.arange(nn)
+        
+        if self.dim == 2:
+            # self.conn = np.c_[self.conn, self.conn + nn * (self.conn >= 0)]
+            self.conn = np.c_[self.conn + 0 * nn, 
+                              self.conn + 1 * nn]
         else:
-            if hasattr(figManager.window, 'maximize'):
-                figManager.resize(figManager.window.maximize())
-        plt.title("Select " + str(n) + " points... and press enter")
-        pts1 = np.array(plt.ginput(n, timeout=0))
-        plt.close()
-        dx = np.kron(np.ones(pts1.shape[0]), self.n[:, [0]]) - np.kron(
-            np.ones((self.n.shape[0], 1)), pts1[:, 0]
-        )
-        dy = np.kron(np.ones(pts1.shape[0]), self.n[:, [1]]) - np.kron(
-            np.ones((self.n.shape[0], 1)), pts1[:, 1]
-        )
-        nset = np.argmin(np.sqrt(dx ** 2 + dy ** 2), axis=0)
-        self.Plot()
-        plt.plot(self.n[nset, 0], self.n[nset, 1], "ro")
-        return nset
-
-    def SelectLine(self, eps=1e-8):
+            self.conn = np.c_[
+                self.conn + 0 * nn,
+                self.conn + 1 * nn,
+                self.conn + 2 * nn,
+                # self.conn + nn * (self.conn >= 0),
+                # self.conn + 2 * nn * (self.conn >= 0),
+                ]
+        
+      
+      
+    def Connectivity_Matrix(self):    
         """
-        Selection of the nodes along a line defined by 2 nodes.
-        """
-        plt.figure()
-        self.Plot()
-        figManager = plt.get_current_fig_manager()
-        if hasattr(figManager.window, 'showMaximized'):
-            figManager.window.showMaximized()
-        else:
-            if hasattr(figManager.window, 'maximize'):
-                figManager.resize(figManager.window.maximize())
-        plt.title("Select 2 points of a line... and press enter")
-        pts1 = np.array(plt.ginput(2, timeout=0))
-        plt.close()
-        n1 = np.argmin(np.linalg.norm(self.n - pts1[0, :], axis=1))
-        n2 = np.argmin(np.linalg.norm(self.n - pts1[1, :], axis=1))
-        v = np.diff(self.n[[n1, n2]], axis=0)[0]
-        nv = np.linalg.norm(v)
-        v = v / nv
-        n = np.array([v[1], -v[0]])
-        c = n.dot(self.n[n1, :])
-        (rep,) = np.where(abs(self.n.dot(n) - c) < eps)
-        c1 = v.dot(self.n[n1, :])
-        c2 = v.dot(self.n[n2, :])
-        nrep = self.n[rep, :]
-        (rep2,) = np.where(((nrep.dot(v) - c1)
-                            * (nrep.dot(v) - c2)) < nv * 1e-2)
-        nset = rep[rep2]
-        self.Plot()
-        plt.plot(self.n[nset, 0], self.n[nset, 1], "ro")
-        return nset
-
-    def _get_p(self):
-        """
-        Generate a list that number the control points
+        Return a connectivity matrix C of shape (N_PC, N_Nodes). 
+        It allows the shape function evaluation matrix self.phi matrix to
 
         Returns
         -------
-        p : ndarray.
+        None.
 
         """
+        e = self.e[0].ravel()
+        e_uniq, count = np.unique(e, return_counts=True)
+    
+        row = np.arange(len(e))
+        col = e
+        val = np.ones_like(col) 
         
-        nu, ind = np.unique(self.n, axis=0, return_index=True)
-        nu = nu[np.argsort(ind)]
-        p = np.zeros(self.n.shape[0])
-        for i in range(len(self.n)):
-            
-            for j in range(len(nu)):
-                if (self.n[i] == nu[j]).all():
-                    index = j
-              
-            p[i] = index
-
-        return p
-
-    def Connectivity(self):
-        nn = len(self.n)
-        self.ndof = nn * self.dim
+        C = sps.csr_matrix((val, (row, col)), shape=(self.nbf, self.n.shape[0]))
+        # self.C = C
+        return C
+        
+        
+        
+    def ConnectivityKnots(self):
+        print("Knot Connectivity.")
+        used_knots = np.zeros(0, dtype=int)
+        for je in self.e_knots.keys():
+            used_knots = np.unique(np.append(used_knots, self.e_knots[je].ravel()))
+        nn = len(used_knots)
+        # self.ndof = nn * self.dim
+        self.conn_knots = -np.ones(self.n_knots.shape[0], dtype=int)
+        self.conn_knots[used_knots] = np.arange(nn)
+       
         if self.dim == 2:
-            self.conn = np.c_[np.arange(nn), np.arange(nn) + nn]
+            self.conn = np.c_[self.conn_knots, self.conn_knots + nn * (self.conn_knots >= 0)]
+        else:
+            self.conn = np.c_[
+                self.conn_knots,
+                self.conn_knots + nn * (self.conn_knots >= 0),
+                self.conn_knots + 2 * nn * (self.conn_knots >= 0),
+                ]
 
-        elif self.dim == 3:
-            self.conn = np.c_[np.arange(nn), np.arange(
-                nn) + nn, np.arange(nn) + 2 * nn]
-
-    """    
-    def Connectivity2(self, order = 'C'):
-        nn = len(self.n)
-        self.ndof = nn * self.dim
-        self.conn = np.arange(self.ndof * nn)
-        if order == 'C':
-            self.conn.reshape(self.dim, nn)
-        
-        elif order == 'N':
-            self.conn.reshape(nn, self.dim)
-    """
 
     def CtrlPts2N(self, ctrlPts=None):
         if ctrlPts is None:
@@ -372,15 +413,17 @@ class BSplinePatch(object):
         if n is None:
             n = self.n.copy()
         if self.dim == 2:
-            nbf = self.Get_nbf_1d()
-            ctrlPts = np.array([n[:, 0].reshape(nbf),
-                                n[:, 1].reshape(nbf)])
+            cpx = n[self.e[0], 0]
+            cpy = n[self.e[0], 1]
+            ctrlPts = np.array([cpx, cpy])
+            # nbf = self.Get_nbf_1d()
+            # ctrlPts = np.array([n[:, 0].reshape(nbf),
+            #                     n[:, 1].reshape(nbf)])
         elif self.dim == 3:
-            nbf = self.Get_nbf_1d()
-            ctrlPts = np.array([n[:, 0].reshape(nbf),
-                                n[:, 1].reshape(nbf),
-                                n[:, 2].reshape(nbf)])
-
+            cpx = n[self.e[0], 0]
+            cpy = n[self.e[0], 1]
+            cpz = n[self.e[0], 2]
+            ctrlPts = np.array([cpx, cpy, cpz])
         return ctrlPts
 
     def saveParaview(self, fname, cam=None, U=None):
@@ -392,7 +435,7 @@ class BSplinePatch(object):
         None.
         """
         
-        spline = self.Get_spline()
+        spline = self.spline
         if U is None:
             spline.saveParaview(self.ctrlPts, ".", fname)
         else:
@@ -400,29 +443,41 @@ class BSplinePatch(object):
             U = np.array(cam.P(*U))
             Ures = U.reshape((1,*self.N2CtrlPts().shape))
             D = {"U" : Ures}
-            spline_def = self.Get_spline()
-            spline_def.saveParaview(self.N2CtrlPts(), './', 'deformed', fields=D)
+            spline.saveParaview(self.N2CtrlPts(), './', 'deformed', fields=D)
 
 
     def Plot(self, U=None, n=None, neval=None, **kwargs):
         """ Physical elements = Image of the parametric elements on Python """
+        
         if neval == None:
             if self.dim == 2:
                 neval = [100, 100]
             elif self.dim == 3:
                 neval = [30, 30, 30]
+        
         alpha = kwargs.pop("alpha", 1)
         edgecolor = kwargs.pop("edgecolor", "k")
-        nbf = self.Get_nbf()
+        
         if n is None:
-            n = self.Get_P()  # control points
+            Px = self.n[:, 0]
+            Py = self.n[:, 1]
+        else:
+            Px = n[:, 0]
+            Py = n[:, 1]           
+        
         if U is None:
-            U = np.zeros(self.dim*nbf)
+            U = np.zeros(self.dim * self.n.shape[0])
+  
+        
         U = U.reshape((self.dim, -1))
+       
 
-
-        Pxm = n[:, 0] + U[0]
-        Pym = n[:, 1] + U[1]
+    
+        Pxm = Px + U[0]
+        Pym = Py + U[1]
+        P = np.c_[Pxm, Pym]
+        
+        P = self.N2CtrlPts(P)
         
         xi = np.linspace(
             self.knotVect[0][self.degree[0]], self.knotVect[0][-self.degree[0]], neval[0])
@@ -433,18 +488,11 @@ class BSplinePatch(object):
         xiu = np.unique(self.knotVect[0])
         etau = np.unique(self.knotVect[1])
 
-        # Basis functions
-        spline = bs.BSpline(self.degree, self.knotVect)
-            
-        phi1 = spline.DN([xiu, eta], k=[0, 0])
-        phi2 = spline.DN([xi, etau], k=[0, 0])
-            
-
-        #xe, ye1 = spline(self.ctrlPts)
-        xe1 = phi1.dot(Pxm)
-        ye1 = phi1.dot(Pym)
-        xe2 = phi2.dot(Pxm)
-        ye2 = phi2.dot(Pym)
+        # Mapping from parametric to physical space
+        # P = self.CtrlPts2N(P)
+        P = self.CtrlPts2N(P)
+        xe1, ye1 = self.Mapping(xiu, eta, type_eval='grid', P=P)
+        xe2, ye2 = self.Mapping(xi, etau, type_eval='grid', P=P)
 
         xe1 = xe1.reshape((xiu.size, neval[1]))
         ye1 = ye1.reshape((xiu.size, neval[1]))
@@ -456,7 +504,7 @@ class BSplinePatch(object):
             # Getting one eta iso-curve
             plt.plot(xe1[i, :], ye1[i, :], color=edgecolor,
                      alpha=alpha, **kwargs)
-
+        
         for i in range(etau.size):
             # loop on eta
             # Getting one xi iso-curve
@@ -466,6 +514,7 @@ class BSplinePatch(object):
         plt.plot(Pxm, Pym, color=edgecolor,
                  alpha=alpha, marker='o', linestyle='')
         plt.axis('equal')
+        # plt.title(f"BSpline in physical space with {self.n.shape[0]} nodes")
         plt.show()
 
     def _init_cube(self, neval=50):
@@ -493,11 +542,11 @@ class BSplinePatch(object):
             neval = [50, 50, 50]
         alpha = kwargs.pop("alpha", 1)
         edgecolor = kwargs.pop("edgecolor", "k")
-        nbf = self.Get_nbf()
+        nbf = self.nbf
         if n is None:
-            n = self.Get_P()  # control points
+            n = self.n # control points
         if U is None:
-            U = np.zeros(self.dim*nbf)
+            U = np.zeros(self.dim *nbf)
         U = U.reshape((self.dim, -1))
 
         Pxm = n[:, 0] + U[0]
@@ -505,11 +554,8 @@ class BSplinePatch(object):
         Pzm = n[:, 2] + U[2]
         
         coord = self._init_cube(neval=neval).T
-        spline = self.Get_spline()
-        N = spline.DN(coord, k=[0,0,0])
-        x = N @ Pxm
-        y = N @ Pym
-        z = N @ Pzm
+        
+        x, y, z = self.Mapping(xi=coord[0], eta=coord[1], zeta=coord[2])
         
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
@@ -593,26 +639,38 @@ class BSplinePatch(object):
 
     def DegreeElevation(self, new_degree):
 
-        spline = bs.BSpline(self.degree, self.knotVect)
+        spline = self.spline
 
         t = new_degree - self.degree
         self.ctrlPts = spline.orderElevation(self.ctrlPts, t)
         self.degree = np.array(new_degree)
         self.knotVect = spline.getKnots()
         self.n = self.CtrlPts2N()
-        self.e = self.Init_elem_2D()
+        self.e = {0: np.arange(self.n.shape[0])}
+        self.spline = bs.BSpline(self.degree, self.knotVect)
+        self.nbf = self.spline.getNbFunc()
+        if self.dim == 2:
+            self.elem = self.Init_elem_2D()
+        else:
+            self.elem = self.Init_elem_3D()
 
     def KnotInsertion(self, knots):
 
-        spline = self.Get_spline()
-        # self.ctrlPts =  self.ctrlPts.transpose(0,2,1)
-        self.ctrlPts = spline.knotInsertion(self.ctrlPts, knots)
+        spline = self.spline
+        ctrlPts = self.N2CtrlPts()
+        ctrlPts = spline.knotInsertion(ctrlPts, knots)
         self.knotVect = spline.getKnots()
-        self.n = self.CtrlPts2N()
+        self.n = self.CtrlPts2N(ctrlPts=ctrlPts)
+        self.e = {0: np.arange(self.n.shape[0])}
+        self.spline = bs.BSpline(self.degree, self.knotVect)
+        self.nbf = self.spline.getNbFunc()
+        # self.C = self.Connectivity_Matrix()
+        
+        
         if self.dim == 2:
-            self.e = self.Init_elem_2D()
+            self.elem = self.Init_elem_2D()
         elif self.dim == 3:
-            self.e = self.Init_elem_3D()
+            self.elem = self.Init_elem_3D()
 
     def Stiffness(self, hooke):
         """ 
@@ -647,6 +705,7 @@ class BSplinePatch(object):
         wdetJ = sp.sparse.diags(m2.wdetJ)
         if self.dim == 3:
             #print(m.dphixdx.shape, wdetJ.shape)
+            # print((m2.dphixdx.T @ wdetJ @ m2.dphixdx).shape)
             L = m2.dphixdx.T @ wdetJ @ m2.dphixdx + \
                 m2.dphixdy.T @ wdetJ @ m2.dphixdy + \
                 m2.dphixdz.T @ wdetJ @ m2.dphixdz + \
@@ -663,8 +722,7 @@ class BSplinePatch(object):
                 m2.dphiydy.T @ wdetJ @ m2.dphiydy + \
                 m2.dphixdy.T @ wdetJ @ m2.dphixdy + \
                 m2.dphiydx.T @ wdetJ @ m2.dphiydx
-
-            
+ 
         return L
 
     def DoubleLaplacian(self):
@@ -679,15 +737,26 @@ class BSplinePatch(object):
     
 
     def compute_bbox_area(self, cam, e):
+        """
+        Compute a box around an bspline element e
+
+        Parameters
+        ----------
+        cam : Camera model
         
-        P = self.Get_P()
-        
+        e : element from  Elem_2D / Elem_3D
+            .
+
+        Returns
+        -------
+        bbox_area : float
+            area of the box around element
+
+        """        
         if self.dim == 2: 
             
-            N, _, _, _ = self.ShapeFunctions(e.xi, e.eta)
+            x, y = self.Mapping(xi=e.xi, eta=e.eta, type_eval='grid')
             
-            x = N @ P[:, 0]
-            y = N @ P[:, 1]
             u, v = cam.P(x, y)
             
             
@@ -699,11 +768,7 @@ class BSplinePatch(object):
         
         if self.dim == 3: 
             
-            N, _, _, _, _ = self.ShapeFunctions(e.xi, e.eta, e.zeta)
-            
-            x = N @ P[:, 0]
-            y = N @ P[:, 1]
-            z = N @ P[:, 2]
+            x, y, z = self.Mapping(xi=e.xi, eta=e.eta, zeta=e.zeta, type_eval='grid')
             u, v, w = cam.P(x, y, z)
             
             
@@ -717,18 +782,28 @@ class BSplinePatch(object):
      
      
     def compute_largest_edge(self, cam, e):
-        
-        P = self.Get_P()
-        spline = self.Get_spline()
+        """
+        Compute the largest edge of  a rectange that approximate the element e
+
+        Parameters
+        ----------
+       cam : Camera model
+       
+       e : element from  Elem_2D / Elem_3D
+           .
+
+       Returns
+       -------
+       L_max : int
+           Rounded lenght of the longest edge
+
+        """
+
         
         if self.dim == 2:
             
-            N = spline.DN([e.xi, e.eta], k=[0, 0])
-            
-            x = N @ P[:, 0]
-            y = N @ P[:, 1]
+            x, y = self.Mapping(xi=e.xi, eta=e.eta, type_eval='grid')
             u, v = cam.P(x, y)
-            
             
             # First corner
             L1 = np.sqrt( (u[1] - u[0]) ** 2 + (v[1]- v[0]) ** 2)
@@ -744,11 +819,7 @@ class BSplinePatch(object):
         
         if self.dim == 3:
             
-            N = spline.DN([e.xi, e.eta, e.zeta], k=[0, 0, 0])
-            
-            x = N @ P[:, 0]
-            y = N @ P[:, 1]
-            z = N @ P[:, 2]
+            x, y, z = self.Mapping(xi=e.xi, eta=e.eta, zeta=e.zeta, type_eval='grid')
             u, v, w = cam.P(x, y, z)
             
             
@@ -766,101 +837,30 @@ class BSplinePatch(object):
             
             L_max = max(L1, L2, L3, L4, L5, L6)
             return int(L_max)
-        
-    def _area(self, cam):
             
-        m2 = self
-        if self.dim == 2:
-            
-            m2.GaussIntegration([1, 1])
-            dudx, dudy, dvdx, dvdy = cam.dPdX(m2.pgx, m2.pgy)
-            detJP = dudx * dvdy - dvdx * dudy
-            return m2.wdetJ * detJP
-            
-        if self.dim == 3:
-            
-            m2.GaussIntegration([1, 1, 1])
-            dudx, dudy, dudz, dvdx, dvdy, dvdz, dwdx, dwdy, dwdz = cam.dPdX(m2.pgx, m2.pgy, m2.pgz)
-            
-            detJP = dudx*dvdy*dwdz + dvdx*dudy*dwdz + dudx*dwdy*dvdz - \
-                    dwdx*dvdy*dudz - dvdx*dwdy*dudz - dwdx*dudy*dvdz
-                    
-            return m2.wdetJ * detJP
-            
-    def compute_elem_area(self, e, areas):
-        return int(areas[e.num])        
-            
-
-    def Get_param(self, cam):
-        
-        XI = np.empty(0)
-        ETA = np.empty(0)
-        if self.dim == 2 :
-            print('2d')
-            for key in self.e:
-                e = self.e[key]                
-                
-                N_pix = self.compute_largest_edge(cam, e)
-                # N_pix = self.compute_bbox_area(cam, e)
-                # N_pix = self.compute_elem_area(e, areas)
-    
-                print(f"élément {key} | N_pix : {N_pix}")
-                xi = np.linspace(e.xi[0], e.xi[1], N_pix)
-                eta = np.linspace(e.eta[0], e.eta[1], N_pix)
-                param = np.meshgrid(xi, eta, indexing='ij')
-                xi = param[0].ravel()
-                eta = param[1].ravel()
-                XI = np.hstack((XI, xi))
-                ETA = np.hstack((ETA, eta))
-            
-            return XI, ETA
-        
-        if self.dim == 3:
-            print('3d')
-            ZETA = np.empty(0)
-            for key in self.e:
-                e = self.e[key]
-
-                
-                N_pix = self.compute_largest_edge(cam, e)
-                print(f"Elem {key}\t| N_pix = {N_pix}")
-                xi = np.linspace(e.xi[0], e.xi[1], N_pix)
-                eta = np.linspace(e.eta[0], e.eta[1], N_pix)
-                zeta = np.linspace(e.zeta[0], e.zeta[1], N_pix)
-                param = np.meshgrid(xi, eta, zeta, indexing='ij')
-                xi = param[0].ravel()
-                eta = param[1].ravel()
-                zeta = param[2].ravel()
-                
-                XI = np.hstack((XI, xi))
-                ETA = np.hstack((ETA, eta))
-                ZETA = np.hstack((ZETA, zeta))
-                
-            print(f"There is {XI.shape[0]} eval points")
-            return XI, ETA, ZETA
-           
 
     def InverseBSplineMapping(self, x, y, init=None, elem=None):
         """ 
         Inverse the BSpline mapping in order to map the coordinates
         of any physical points (x, y, z) to their corresponding position in
-        the parametric space (xg, yg).
+        the parametric space (xi_g, eta_g).
 
         Parameter : 
             m : bspline mesh from pyxel
-            xpix : x coordinate in physical space
-            ypix : y coordinate in physical space
+            x : x coordinate in physical space
+            y : y coordinate in physical space
 
         Return :
             xg, yg : x coordinate 
         """
 
         # Basis function
-        spline = self.Get_spline()
-        # P = self.Get_P()
+        spline = self.spline
+        ctrlPts = self.N2CtrlPts()
+        
         # Coordinates of controls points
-        xn = self.n[:, 0]
-        yn = self.n[:, 1]
+        xn = ctrlPts[0].ravel()
+        yn = ctrlPts[1].ravel()
 
         # Initializing  parametric integration points to zero
         if init is None :
@@ -870,25 +870,27 @@ class BSplinePatch(object):
             
             else:
                 xi_g = elem.xi[0] * np.ones_like(x)
-                eta_g = elem.eta * np.ones_like(y)
+                eta_g = elem.eta[0] * np.ones_like(y)
             
         else :
             xi_g = init[0]
             eta_g = init[1]
         
-        #px.PlotMeshImage(f, self, cam)
-        res = 1
-        # Gauss Newton loop
-        for k in range(7):
-
+        
+        maxiter = 3
+        # Newton loop
+        for k in range(maxiter):
+            
+            
+            
             N = spline.DN(np.array([xi_g, eta_g]), k=[0, 0])
-            N_xi = spline.DN(np.array([xi_g, eta_g]), k=[1, 0])
-            N_eta = spline.DN(np.array([xi_g, eta_g]), k=[0, 1])
+            dNdxi = spline.DN(np.array([xi_g, eta_g]), k=[1, 0])
+            dNdeta = spline.DN(np.array([xi_g, eta_g]), k=[0, 1])
 
-            dxdxi = N_xi @ xn
-            dydxi = N_xi @ yn
-            dxdeta = N_eta @ xn
-            dydeta = N_eta @ yn
+            dxdxi = dNdxi @ xn
+            dydxi = dNdxi @ yn
+            dxdeta = dNdeta @ xn
+            dydeta = dNdeta @ yn
 
             detJ = dxdxi * dydeta - dydxi * dxdeta
             invJ = np.array([dydeta / detJ, -dxdeta / detJ,
@@ -900,168 +902,83 @@ class BSplinePatch(object):
             dxi_g = invJ[:, 0] * (x - xp) + invJ[:, 1] * (y - yp)
             deta_g = invJ[:, 2] * (x - xp) + invJ[:, 3] * (y - yp)
 
-            # dx = np.dot(dxi_g, dxi_g) + np.dot(deta_g, deta_g)
             xi_g = xi_g + dxi_g
             eta_g = eta_g + deta_g
             
-            res = np.linalg.norm(x - xp) + np.linalg.norm(y - yp) 
+            res = max(np.linalg.norm(x - xp),
+                      np.linalg.norm(y - yp))
             
             if elem is None:
-                select = (xi_g == np.clip(xi_g, 0, 1)) &\
-                    (eta_g == np.clip(eta_g, 0, 1))
                 
-                xi_g = xi_g[select]
-                eta_g = eta_g[select]
+                if k < 1:
+                    
+                    select = (xi_g == np.clip(xi_g, 0, 1)) &\
+                             (eta_g == np.clip(eta_g, 0, 1))
                 
-                # xi_g = np.clip(xi_g, 0, 1)
-                # eta_g = np.clip(eta_g, 0, 1)
+                    xi_g = xi_g[select]
+                    eta_g = xi_g[select]
+                    
+                    x = x[select]
+                    y = y[select]
+                
+                else:
+                    
+                    xi_g = np.clip(xi_g, 0, 1)
+                    eta_g = np.clip(eta_g, 0, 1)
+                    
                 
             else :
                 
-                select = (xi_g == np.clip(xi_g, elem.xi[0], elem.xi[1])) &\
-                    (eta_g == np.clip(eta_g, elem.eta[0], elem.eta[1]))
+                if k < 1:
+                    
+                    select = (xi_g == np.clip(xi_g, elem.xi[0], elem.xi[1])) &\
+                             (eta_g == np.clip(eta_g, elem.eta[0], elem.eta[1]))&\
+                             (np.isfinite(xi_g))&\
+                             (np.isfinite(eta_g))
                 
-                xi_g = xi_g[select]
-                eta_g = eta_g[select]
-                
-                # xi_g = np.clip(xi_g, elem.xi[0], elem.xi[1])
-                # eta_g = np.clip(eta_g, elem.eta[0], elem.eta[1])
-                
-            x = x[select]
-            y = y[select]
+                    xi_g = xi_g[select]
+                    eta_g = eta_g[select]
+                    x = x[select]
+                    y = y[select]
+             
+            # print("XI", xi_g.min(), xi_g.max())
+            # print("ETA", eta_g.min(), eta_g.max())
             print(f"Res : {res}")
-            if res < 1.0e-6:
+            if res < 1.0e-4:
                 break
         
         
         return xi_g, eta_g
-
-    def DICIntegrationPixel(self, f, m, cam, ninte=1000, P=None):
-        """
-        Building integration operator where integration points are located
-        in center of pixels
-
-        Parameter:
-        ---------
-
-        m : pyxel bspline mesh
-
-        cam : camera model from pyxel
-        
-
-        if type(ninte) == int:
-            ninte = [ninte, ninte]
-        if ninte is None:
-            ninte = [1000, 1000]
-            
-        # nbg_xi = ninte[0]
-        # nbg_eta = ninte[1]
-        
-        # pxi = 1.0 / nbg_xi
-        # peta = 1.0 / nbg_eta
-        
-       
-        xi = np.linspace(0, 1, ninte[0])
-        eta = np.linspace(0, 1, ninte[1])
-        """
-        # initiating control points
-        P = self.Get_P()
-
-        # Initialize evaluation points
-        
-        xi, eta = self.Get_param(cam)
-        
-        param = np.meshgrid(xi, eta, indexing='ij')
-        
-        # Get spline object for basis function
-        spline = self.Get_spline()
-        
-        # Basis function at evaluation points
-        phi = spline.DN(np.array([xi, eta]), k=[0, 0])
-        # phi = spline.DN([xi, eta], k=[0, 0])
-        
-        # Going from parametric space to physical space
-        x = phi @ P[:, 0]
-        y = phi @ P[:, 1]
-
-        # Going from physical space to pixel space
-        up, vp = cam.P(x, y)
-        
-        # Placing evalution points in image space in the center of pixels
-        ur = np.round(up).astype('uint16')
-        vr = np.round(vp).astype('uint16')
-        
-        Nx = f.pix.shape[0]
-        Ny = f.pix.shape[1]
-        
-        # idpix = - Nx * vr + ur
-        idpix = np.ravel_multi_index((ur, vr), (Nx, Ny))
-        _, rep = np.unique(idpix, return_index=True)
-                
-        u = ur[rep]
-        v = vr[rep]
-        
-        xi_init = param[0].ravel()[rep]
-        eta_init = param[1].ravel()[rep]
-                
-        init = [xi_init, eta_init]
-        
-        # Going from pixel space to the physical space by inversing camera model
-        xg, yg = cam.Pinv(u.astype(float), v.astype(float))
-        
-        # Going from physical space to parametric space by inversing mapping
-        xi, eta = self.InverseBSplineMapping(xg, yg, init=init)
-        
-        # Create boolean mask to delete evaluation points located on the border
-        select = (xi > 0) & (xi < 1) &\
-                 (eta > 0) & (eta < 1) 
-
-        xi = xi[select]
-        eta = eta[select]
-
-        spline = self.Get_spline()
-        phi = spline.DN(np.array([xi, eta]), k=[0, 0])
-
-        self.npg = phi.shape[0]
-        self.wdetJ = np.ones_like(xi)
-
-        self.phi = phi
-        
-        # nbf = self.Get_nbf()
-        # zero = sps.csr_matrix((self.npg, nbf))
-        # self.phix = sps.hstack((phi, zero),  'csc')
-        # self.phiy = sps.hstack((zero, phi),  'csc')
-
-        if P is None:
-            P = self.Get_P()
-
-        self.pgx = phi @ P[:, 0]
-        self.pgy = phi @ P[:, 1]
-        
-        return init, xi, eta
     
-    def DICIntegrationPixelElem(self, f, cam, P=None):
+    def DICIntegrationPixel(self, f, cam):
         
-        if P is None :
-            P = self.Get_P()
         
-        spline = self.Get_spline()
+        ctrlPts = self.N2CtrlPts()
+        Px = ctrlPts[0].ravel()
+        Py = ctrlPts[1].ravel()
+        
+        spline = self.spline
         
         xi_glob = np.empty(0)
         eta_glob = np.empty(0)
         
-        for key in self.e:
+        for key in self.elem:
             
-            e = self.e[key]
+            elem = self.elem[key]
+            
             print(f"\nÉlément {key}")
-            N_pix = self.compute_largest_edge(cam, e)
-            N_pix = int(N_pix * 2)
-            xi = np.linspace(e.xi[0], e.xi[1], N_pix)
-            eta = np.linspace(e.eta[0], e.eta[1], N_pix)
-            param = np.meshgrid(xi, eta, indexing='ij')
-            N = spline.DN([xi, eta], k=[0,0])
             
-            u, v = cam.P(N @ P[:, 0], N @ P[:, 1])
+            N_pix = self.compute_largest_edge(cam, elem)
+            N_pix = int(N_pix * 3)
+            
+            xi = np.linspace(elem.xi[0], elem.xi[1], N_pix)
+            eta = np.linspace(elem.eta[0], elem.eta[1], N_pix)
+            param = np.meshgrid(xi, eta, indexing='ij')
+            
+            N = spline.DN([xi, eta], k=[0,0])
+            # N = N @ self.C
+            
+            u, v = cam.P(N @ Px, N @ Py)
             
             ur = np.round(u).astype('uint16')
             vr = np.round(v).astype('uint16')
@@ -1069,7 +986,6 @@ class BSplinePatch(object):
             Nx = f.pix.shape[0]
             Ny = f.pix.shape[1]
             
-            # idpix = - Nx * vr + ur
             idpix = np.ravel_multi_index((ur, vr), (Nx, Ny))
             _, rep = np.unique(idpix, return_index=True)
                     
@@ -1083,10 +999,10 @@ class BSplinePatch(object):
             
             xg, yg = cam.Pinv(ur.astype(float), vr.astype(float))
             
-            xi, eta = self.InverseBSplineMapping(xg, yg, init=init, elem=e)
+            xi, eta = self.InverseBSplineMapping(xg, yg, init=init, elem=elem)
             
-            select = (xi > e.xi[0]) & (xi < e.xi[1]) &\
-                 (eta > e.eta[0]) & (eta < e.eta[1]) 
+            select = (xi > elem.xi[0]) & (xi < elem.xi[1]) &\
+                 (eta > elem.eta[0]) & (eta < elem.eta[1]) 
             
             xi = xi[select]
             eta = eta[select]
@@ -1094,20 +1010,16 @@ class BSplinePatch(object):
             xi_glob = np.hstack((xi_glob, xi))
             eta_glob = np.hstack((eta_glob, eta))
             
-        phi = spline.DN(np.array([xi_glob, eta_glob]), k=[0, 0])
+        phi = self.ReshapePhi(spline.DN(np.array([xi_glob, eta_glob]), k=[0, 0]))
 
         self.npg = phi.shape[0]
         self.wdetJ = np.ones_like(xi_glob)
         
         
-        self.phi = phi
-        # nbf = self.Get_nbf()
-        # zero = sps.csr_matrix((self.npg, nbf))
-        # self.phix = sps.hstack((phi, zero),  'csc')
-        # self.phiy = sps.hstack((zero, phi),  'csc')
+        self.phi = phi # @ self.C
 
-        self.pgx = phi @ P[:, 0]
-        self.pgy = phi @ P[:, 1]   
+        self.pgx = self.phi @ Px
+        self.pgy = self.phi @ Py 
             
     
     def GaussIntegration(self, npg=None, P=None):
@@ -1153,32 +1065,38 @@ class BSplinePatch(object):
     
             mes_xi = np.kron(np.ones(eta.shape[0]), mes_xi)
             mes_eta = np.kron(mes_eta, np.ones(xi.shape[0]))
-    
+            
             if P is None:
-                P = self.Get_P()
+                ctrlPts = self.N2CtrlPts()
+                Px = ctrlPts[0].ravel()
+                Py = ctrlPts[1].ravel()
+            else:
+                Px = P[:, 0]
+                Py = P[:, 1]
     
             """ Spatial derivatives """
     
-            phi, dphidx, dphidy, detJ = self.ShapeFunctions(xi, eta, P=P)
-            self.npg = phi.shape[0]
+            N, dNdx, dNdy, detJ = self.ShapeFunctions(xi, eta, type_eval='grid')
+            
+            self.npg = N.shape[0]
     
             """ Integration weights + measures + Jacobian of the transformation """
             self.wdetJ = np.kron(wg_eta, wg_xi)*np.abs(detJ)*mes_xi*mes_eta/4
-            zero = sps.csr_matrix((self.npg, nbf))
-            self.phi = phi
-            self.dphidx = dphidx
-            self.dphidy = dphidy
+            zero = sps.csr_matrix((self.npg, self.n.shape[0]))
+            self.phi = self.ReshapePhi(N) 
+            self.dphidx = self.ReshapePhi(dNdx)
+            self.dphidy = self.ReshapePhi(dNdy)
+            
             # self.phix = sps.hstack((phi, zero),  'csc')
             # self.phiy = sps.hstack((zero, phi),  'csc')
-            self.dphixdx = sps.hstack((dphidx, zero),  'csc')
-            self.dphixdy = sps.hstack((dphidy, zero),  'csc')
-            self.dphiydx = sps.hstack((zero, dphidx),  'csc')
-            self.dphiydy = sps.hstack((zero, dphidy),  'csc')
+            self.dphixdx = sps.hstack((self.dphidx, zero),  'csc')
+            self.dphixdy = sps.hstack((self.dphidy, zero),  'csc')
+            self.dphiydx = sps.hstack((zero, self.dphidx),  'csc')
+            self.dphiydy = sps.hstack((zero, self.dphidy),  'csc')
             
-            
-    
-            self.pgx = self.phi @ P[:, 0]
-            self.pgy = self.phi @ P[:, 1]
+            # print(N.shape, Px.shape)
+            self.pgx = N @ Px
+            self.pgy = N @ Py
             
         if self.dim == 3 :
             
@@ -1246,68 +1164,73 @@ class BSplinePatch(object):
             detGauss = mes_xi * mes_eta * mes_zeta / 8
     
             if P is None:
-                P = self.Get_P()
+                ctrlPts = self.N2CtrlPts()
+                Px = ctrlPts[0].ravel()
+                Py = ctrlPts[1].ravel()
+                Pz = ctrlPts[2].ravel()
+            else:
+                Px = P[:, 0]
+                Py = P[:, 1]
+                Pz = P[:, 2]
+
     
             """ Spatial derivatives """
     
-            phi, dphidx, dphidy, dphidz, detJ = self.ShapeFunctions(xi, eta, zeta, P=P)
+            N, dNdx, dNdy, dNdz, detJ = self.ShapeFunctions(xi, eta, zeta, type_eval='grid')
+        
             
+            self.npg = N.shape[0]
             
-            
-            self.npg = phi.shape[0]
-            nbf = self.Get_nbf()
             """ Integration weights + measures + Jacobian of the transformation """
             self.wdetJ = w*np.abs(detJ)*detGauss
             
-            zero = sps.csr_matrix((self.npg, nbf))
             
-            self.phi = phi
-            # self.phix = sps.hstack((phi, zero, zero),  'csc')
-            # self.phiy = sps.hstack((zero, phi, zero),  'csc')
-            # self.phiz = sps.hstack((zero, zero, phi),  'csc')
-    
-            self.dphixdx = sps.hstack((dphidx, zero, zero),  'csc')
-            self.dphixdy = sps.hstack((dphidy, zero, zero),  'csc')
-            self.dphixdz = sps.hstack((dphidz, zero, zero),  'csc')
-            self.dphiydx = sps.hstack((zero, dphidx, zero),  'csc')
-            self.dphiydy = sps.hstack((zero, dphidy, zero),  'csc')
-            self.dphiydz = sps.hstack((zero, dphidz, zero),  'csc')
-            self.dphizdx = sps.hstack((zero, zero, dphidx), 'csc')
-            self.dphizdy = sps.hstack((zero, zero, dphidy), 'csc')
-            self.dphizdz = sps.hstack((zero, zero, dphidz), 'csc')
             
-            self.pgx = self.phi @ P[:, 0]
-            self.pgy = self.phi @ P[:, 1]
-            self.pgz = self.phi @ P[:, 2]
+            self.phi = self.ReshapePhi(N)
+            self.dphidx = self.ReshapePhi(dNdx)
+            self.dphidy = self.ReshapePhi(dNdy)
+            self.dphidz = self.ReshapePhi(dNdz)
+            
+            zero = sps.csr_matrix((self.npg, self.phi.shape[1]))
+            
+            self.dphixdx = sps.hstack((self.dphidx, zero, zero),  'csc')
+            self.dphixdy = sps.hstack((self.dphidy, zero, zero),  'csc')
+            self.dphixdz = sps.hstack((self.dphidz, zero, zero),  'csc')
+            self.dphiydx = sps.hstack((zero, self.dphidx, zero),  'csc')
+            self.dphiydy = sps.hstack((zero, self.dphidy, zero),  'csc')
+            self.dphiydz = sps.hstack((zero, self.dphidz, zero),  'csc')
+            self.dphizdx = sps.hstack((zero, zero, self.dphidx), 'csc')
+            self.dphizdy = sps.hstack((zero, zero, self.dphidy), 'csc')
+            self.dphizdz = sps.hstack((zero, zero, self.dphidz), 'csc')
+            #print(phi.shape, P[:, 0].shape)
+            self.pgx = N @ Px
+            self.pgy = N @ Py
+            self.pgz = N @ Pz
 
 
     def GetApproxElementSize(self, cam=None):
         if self.dim == 2:
             if cam is None:
                 # in physical unit
-                u, v = self.n[:, 0], self.n[:, 1]
                 m2 = self.Copy()
-                m2.GaussIntegration(npg=[1, 1], P=np.c_[u, v])
+                m2.GaussIntegration(npg=[1, 1])
                 n = np.max(np.sqrt(m2.wdetJ))
             else:
                 # in pyxel unit (int)
-                u, v = cam.P(self.n[:, 0], self.n[:, 1])
     
                 m2 = self.Copy()
-                m2.GaussIntegration(npg=[1, 1], P=np.c_[u, v])
+                m2.GaussIntegration(npg=[1, 1])
                 n = int(np.floor(np.max(np.sqrt(m2.wdetJ))))
         
         if self.dim == 3:
             if cam is None:
-                u, v, w = self.n[:, 0], self.n[:, 1], self.n[:, 2]
                 m2 = self.Copy()
-                m2.GaussIntegration(npg=[1, 1, 1], P=np.c_[u, v, w])
+                m2.GaussIntegration(npg=[1, 1, 1])
                 n = int(np.floor(np.max(np.cbrt(m2.wdetJ))))
                 
             else:
-                u, v, w = cam.P(self.n[:, 0], self.n[:, 1], self.n[:, 2])
                 m2 = self.Copy()
-                m2.GaussIntegration(npg=[1, 1, 1], P=np.c_[u, v, w])
+                m2.GaussIntegration(npg=[1, 1, 1])
                 n = int(np.floor(np.max(np.cbrt(m2.wdetJ))))
                 
         return n
@@ -1315,28 +1238,26 @@ class BSplinePatch(object):
     def DICIntegrationFast(self, n=10):
         self.DICIntegration(n)
 
-    def DICIntegration(self, n=10):
+    def DICIntegration(self, npt=10):
         """ DIC integration: build of the global differential operators """
-        if hasattr(n, 'rz'):
+        if hasattr(npt, 'rz'):
             # if n is a camera then n is autocomputed
-            n = self.GetApproxElementSize(n)
-        if type(n) == int:
-            n = np.array([n, n], dtype=int)
+            npt = self.GetApproxElementSize(npt)
+        if type(npt) == int:
+            npt = np.array([npt, npt], dtype=int)
 
-        n = np.maximum(self.degree + 1, n)
+        npt = np.maximum(self.degree + 1, npt)
 
         # Nombre de point d'intégration par élément
-        nbg_xi = n[0]
-        nbg_eta = n[1]
+        nbg_xi = npt[0]
+        nbg_eta = npt[1]
 
         """Espace de référence [-1,1]"""
         pxi = 1.0 / nbg_xi
         peta = 1.0 / nbg_eta
         Rect_xi = np.linspace(-1+pxi, 1-pxi, nbg_xi)
         Rect_eta = np.linspace(-1+peta, 1-peta, nbg_eta)
-
-        
-
+ 
         """
         On met en place le mapping de [-1,1] à [xi_i, xi_i+1] un élément
         de l'espace paramétrique
@@ -1374,24 +1295,23 @@ class BSplinePatch(object):
         Calcul des matrices contenant les fonctions de formes évaluée aux 
         points d'intégrations
         """
-        phi, dphidx, dphidy, detJ = self.ShapeFunctions(xi, eta)
+        #phi, dphidx, dphidy, detJ = self.ShapeFunctions(xi, eta)
+        spline = self.spline
+        phi = self.ReshapePhi(spline.DN([xi, eta], k=[0, 0]))
         self.npg = phi.shape[0]
-
-        P = self.Get_P()
-        self.wdetJ = np.ones_like(detJ)
+        self.wdetJ = np.ones(self.npg)
 
         self.phi = phi
         
-        # nbf = self.Get_nbf()
-        # zero = sps.csr_matrix((self.npg, nbf))
-        # self.phix = sps.hstack((phi, zero),  'csc')
-        # self.phiy = sps.hstack((zero, phi),  'csc')
+        ctrlPts = self.N2CtrlPts()
+        Px = ctrlPts[0].ravel()
+        Py = ctrlPts[1].ravel()
+        
+        self.pgx = self.phi @ self.n[:, 0] 
+        self.pgy = self.phi @ self.n[:, 1]  
 
-        self.pgx = self.phi @ P[:, 0]
-        self.pgy = self.phi @ P[:, 1]
 
-
-    def InverseBSplineMapping3D(self, x, y, z, init=None, elem=None):
+    def InverseBSplineMapping3D(self, x, y, z, init=None, elem=None, return_pg=False):
         """ 
         Inverse the BSpline mapping in order to map the coordinates
         of any physical points (x, y, z) to their corresponding position in
@@ -1406,14 +1326,16 @@ class BSplinePatch(object):
             xg, yg : x coordinate 
         """
         # Basis function
-        spline = self.Get_spline()
-        # P = self.Get_P()
-        # Coordinates of controls points
-        xn = self.n[:, 0]
-        yn = self.n[:, 1]
-        zn = self.n[:, 2]
+        spline = self.spline
         
-        nan = float('nan')
+        # Coordinates of controls points
+        
+        ctrlPts = self.N2CtrlPts()
+        
+        xn = ctrlPts[0].ravel()
+        yn = ctrlPts[1].ravel()
+        zn = ctrlPts[2].ravel()
+        
         # Initializing  parametric integration points to zero
         if init is None :
             if elem is None:
@@ -1435,9 +1357,9 @@ class BSplinePatch(object):
         # Newton loop
         for k in range(maxiter):
             N = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,0,0])
-            N_xi = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[1,0,0])
-            N_eta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,1,0])
-            N_zeta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,0,1])
+            dNdxi = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[1,0,0]) 
+            dNdeta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,1,0]) 
+            dNdzeta = spline.DN(np.array([xi_g, eta_g, zeta_g]), k=[0,0,1]) 
             
             # Projection into the physical space of evaluation point
             xp = N @ xn
@@ -1445,19 +1367,19 @@ class BSplinePatch(object):
             zp = N @ zn
 
             # Jacobian 
-            J1 = N_xi @ xn
-            J4 = N_xi @ yn
-            J7 = N_xi @ zn
-            J2 = N_eta @ xn
-            J5 = N_eta @ yn
-            J8 = N_eta @ zn
-            J3 = N_zeta @ xn
-            J6 = N_zeta @ yn
-            J9 = N_zeta @ zn
+            J1 = dNdxi @ xn
+            J4 = dNdxi @ yn
+            J7 = dNdxi @ zn
+            J2 = dNdeta @ xn
+            J5 = dNdeta @ yn
+            J8 = dNdeta @ zn
+            J3 = dNdzeta @ xn
+            J6 = dNdzeta @ yn
+            J9 = dNdzeta @ zn
             
 
             
-            del N, N_xi, N_eta, N_zeta
+            del N, dNdxi, dNdeta, dNdzeta
        
             """
             J = np.array([[dxdxi, dxdeta, dxdzeta],
@@ -1564,10 +1486,99 @@ class BSplinePatch(object):
             
             if res < 1.0e-3 or np.math.isnan(res):
                 break            
+        
+        if return_pg:
 
-        return xi_g, eta_g, zeta_g
+            return xi_g, eta_g, zeta_g, x, y, z
+        
+        else:
+            
+            return xi_g, eta_g, zeta_g
+        
 
 
+
+    def DVCIntegrationPixelElem(self, f, cam, P=None, fname=None):
+                   
+                
+        if P is None :
+            ctrlPts = self.N2CtrlPts()
+            Px = ctrlPts[0].ravel()
+            Py = ctrlPts[1].ravel()
+            Pz = ctrlPts[2].ravel()
+            
+        spline = self.spline
+        
+        for key in tqdm(self.elem):
+            e = self.elem[key]
+            print(f"\nÉlément {key} :")
+            
+            # Compute largest eedge of the element
+            N_eval = self.compute_largest_edge(cam, e)
+            
+            # Inflating the number of eval point to ensure to have all pixels
+            N_eval = int(N_eval)
+            # print(f"N_eval = {N_eval ** 3}")
+            
+            # Setting the eval points to find all pxel center
+            xi = np.linspace(e.xi[0], e.xi[1], N_eval)
+            eta = np.linspace(e.eta[0], e.eta[1], N_eval)
+            zeta = np.linspace(e.zeta[0], e.zeta[1], N_eval)
+            
+            # Going from parametric space to image space
+            N = spline.DN([xi, eta, zeta], k=[0, 0, 0]) # @ self.C
+            x, y, z = self.Mapping(xi, eta, zeta, type_eval='grid')
+            u, v, w = cam.P(x, y, z)
+            del N
+            
+            # Rounding the projected points 
+            ur = np.round(u).astype('uint16')
+            vr = np.round(v).astype('uint16')
+            wr = np.round(w).astype('uint16')
+            del u, v, w
+            
+            # Number the rounded points
+            Nx = f.pix.shape[0]
+            Ny = f.pix.shape[1]
+            Nz = f.pix.shape[2]
+            
+            
+            idpix = np.ravel_multi_index((ur, vr, wr), (Nx, Ny, Nz))
+            _, rep = np.unique(idpix, return_index=True)
+            del idpix, Nx, Ny, Nz
+            ur = ur[rep]
+            vr = vr[rep]
+            wr = wr[rep]
+            
+            
+            param = np.meshgrid(xi, eta, zeta, indexing='ij')
+            xi_init = param[0].ravel()[rep]
+            eta_init = param[1].ravel()[rep]
+            zeta_init = param[2].ravel()[rep]
+            del param
+            init = [xi_init, eta_init, zeta_init]
+            xg, yg, zg = cam.Pinv(ur.astype(float), vr.astype(float), wr.astype(float))
+            del ur, vr, wr
+            
+            # Inversing Bspline Mapping
+            xi, eta, zeta, pgx, pgy, pgz = self.InverseBSplineMapping3D(xg, 
+                                                                        yg, 
+                                                                        zg, 
+                                                                        init=init, 
+                                                                        elem=e, 
+                                                                        return_pg=True) 
+            
+            e.wdetJ = np.ones_like(xi)
+            
+            e.xig = xi
+            e.etag = eta
+            e.zetag = zeta
+            
+            e.pgx = pgx
+            e.pgy = pgy
+            e.pgz = pgz
+        
+                
 
 
     def DVCIntegrationPixel(self, f, cam, P=None, m2=None, fname=None):
@@ -1582,19 +1593,17 @@ class BSplinePatch(object):
             m2 = self
                 
         if P is None :
-                P = self.Get_P()
-                P2 = m2.Get_P()
+                P = self.n
                 
         if not os.path.exists(file_path):
                 
-            spline = self.Get_spline()
-            spline2 = m2.Get_spline()
+            spline = self.spline
             
             # xi_glob = np.empty(0)
             # eta_glob = np.empty(0)
             # zeta_glob = np.empty(0)  
-            for key in tqdm(m2.e):
-                e = m2.e[key]
+            for key in tqdm(m2.elem):
+                e = m2.elem[key]
                 print(f"\nÉlément {key} :")
                 
                 # Compute largest eedge of the element
@@ -1602,17 +1611,18 @@ class BSplinePatch(object):
                 
                 # Inflating the number of eval point to ensure to have all pixels
                 N_eval = int(N_eval)
-                print(f"N_eval = {N_eval ** 3}")
+                # print(f"N_eval = {N_eval ** 3}")
                 
                 # Setting the eval points to find all pxel center
                 xi = np.linspace(e.xi[0], e.xi[1], N_eval)
                 eta = np.linspace(e.eta[0], e.eta[1], N_eval)
                 zeta = np.linspace(e.zeta[0], e.zeta[1], N_eval)
                 
-                # Going from parametric space to image space
-                N2 = spline2.DN([xi, eta, zeta], k=[0, 0, 0])
-                u, v, w = cam.P(N2 @ P2[:, 0], N2 @ P2[:, 1], N2 @ P2[:, 2])
-                del N2
+                # Going from parametric space to physical space
+                x, y, z = m2.Mapping(xi, eta, zeta, type_eval='grid')
+                
+                # Going from physical space to image space
+                u, v, w = cam.P(x, y, z)
                 
                 # Rounding the projected points 
                 ur = np.round(u).astype('uint16')
@@ -1629,16 +1639,17 @@ class BSplinePatch(object):
                 idpix = np.ravel_multi_index((ur, vr, wr), (Nx, Ny, Nz))
                 _, rep = np.unique(idpix, return_index=True)
                 del idpix, Nx, Ny, Nz
+                
                 ur = ur[rep]
                 vr = vr[rep]
                 wr = wr[rep]
-                
                 
                 param = np.meshgrid(xi, eta, zeta, indexing='ij')
                 xi_init = param[0].ravel()[rep]
                 eta_init = param[1].ravel()[rep]
                 zeta_init = param[2].ravel()[rep]
                 del param
+                
                 init = [xi_init, eta_init, zeta_init]
                 xg, yg, zg = cam.Pinv(ur.astype(float), vr.astype(float), wr.astype(float))
                 del ur, vr, wr
@@ -1649,7 +1660,7 @@ class BSplinePatch(object):
 
                 # Evaluating shape functions on the integration points 
                 phi_loc = spline.DN(np.array([xi, eta, zeta]), k=[0,0,0])
-                del xi, eta, zeta
+                # del xi, eta, zeta
                 
                 # Stacking the local evaluation matrix
                 if key  == 0:
@@ -1657,6 +1668,8 @@ class BSplinePatch(object):
                     
                 else :
                     phi = sps.vstack((phi, phi_loc))
+                
+                #print(f"{xi.shape, eta.shape, zeta.shape}")
                 # xi_glob = np.hstack((xi_glob, xi))
                 # eta_glob = np.hstack((eta_glob, eta))
                 # zeta_glob = np.hstack((zeta_glob, zeta))
@@ -1664,7 +1677,7 @@ class BSplinePatch(object):
                 
             # phi = spline.DN(np.array([xi_glob, eta_glob, zeta_glob]), k=[0,0,0])
             del phi_loc
-            self.phi = phi
+            self.phi = self.ReshapePhi(phi) # @ self.C
             
             # Saving phi matrix
             if fname is not None:
@@ -1690,7 +1703,8 @@ class BSplinePatch(object):
         else:
             
             print("LOADING PHI FROM CURRENT FILE")
-            self.phi = sps.load_npz(fname) 
+            self.phi = self.ReshapePhi(sps.load_npz(fname))
+            
             self.npg = self.phi.shape[0]
             self.wdetJ = np.ones(self.phi.shape[0])
             
@@ -1702,22 +1716,22 @@ class BSplinePatch(object):
             
 
 
-    def DVCIntegrationPixelPara(self, f, cam, P=None, m2=None):
+    # def DVCIntegrationPixelPara(self, f, cam, P=None, m2=None):
         
         
-        
-        self.phi = _compute_phi_pixel(self, f, cam, m2=m2)
-        if self.phi is not None :
+    #     from paral_utils import _compute_phi_pixel
+    #     self.phi = _compute_phi_pixel(self, f, cam, m2=m2)
+    #     if self.phi is not None :
             
-            P = self.Get_P()
-            self.npg = self.phi.shape[0]
+    #         P = self.n
+    #         self.npg = self.phi.shape[0]
             
             
-            self.wdetJ = np.ones(self.phi.shape[0])
+    #         self.wdetJ = np.ones(self.phi.shape[0])
             
-            self.pgx = self.phi @ P[:, 0]
-            self.pgy = self.phi @ P[:, 1]
-            self.pgz = self.phi @ P[:, 2]  
+    #         self.pgx = self.phi @ P[:, 0]
+    #         self.pgy = self.phi @ P[:, 1]
+    #         self.pgz = self.phi @ P[:, 2]  
 
 
     def DVCIntegration(self, n=None, P=None):
@@ -1767,8 +1781,11 @@ class BSplinePatch(object):
         zeta = 0.5 * (zeta_min + zeta_max) + 0.5 * \
             (zeta_max - zeta_min) * zeta_g
 
-        spline = self.Get_spline()
-        self.phi = spline.DN([xi, eta, zeta], k=[0,0, 0])
+        spline = self.spline
+        
+        N = spline.DN([xi, eta, zeta], k=[0,0,0])
+        
+        self.phi = self.ReshapePhi(N)
         self.npg = self.phi.shape[0]
         self.wdetJ = np.ones(self.phi.shape[0])
         # Integration weights + measures + Jacobian of the transformation
@@ -1780,69 +1797,190 @@ class BSplinePatch(object):
         # self.phiz = sps.hstack((zero, zero, self.phi),  'csc')
         
         if P is None:
-            P = self.Get_P()
+            ctrlPts = self.N2CtrlPts()
+            Px = ctrlPts[0].ravel()
+            Py = ctrlPts[1].ravel()
+            Pz = ctrlPts[2].ravel()
             
-        self.pgx = self.phi @ P[:, 0]
-        self.pgy = self.phi @ P[:, 1]
-        self.pgz = self.phi @ P[:, 2]
+        else:
+            Px = self.n[:, 0]
+            Py = self.n[:, 1]
+            Pz = self.n[:, 2]
+            
+            
+        self.pgx = N @ Px
+        self.pgy = N @ Py
+        self.pgz = N @ Pz
+
+    def ReshapePhi(self, phi):
+        row, col, val = sps.find(phi)
+        col = self.conn[self.e[0].ravel()[col], 0]
+        phi = sps.csr_matrix((val, (row, col)),
+                             shape=(phi.shape[0], self.ndof // self.dim)) 
+        return phi
 
 
+    def Mapping(self, xi, eta, zeta=None, type_eval='list', P=None):
+        """
+        Compute the mapping between parametric points (xi, eta, zeta) and 
+        physical point (x, y, z)
+        
+        'type_eval' argument allow the function to perform 
 
-    def ShapeFunctions(self, xi, eta, zeta=None, P=None):
-        """ xi, eta (and zeta in 3D) are the 1d points 
-        This method computes the basis functions on the mesh-grid point 
-        obtained from the 1d vector points xi, eta (and zeta)
+        Parameters
+        ----------
+        xi : array numpy (Nxi,)
+            Array containing the xi value of parametric points.
+        eta : array numpy (Neta,)
+            Array containing the eta value of parametric points.
+        zeta : array numpy (Nzeta,), optional
+            Array containing the zeta value of parametric points in 3D
+            The default is None.
+        type_eval : string, optional
+            Define if the evaluation of parametric points are done by list or
+            by grid. 
+            If type_val is 'list' then we must have Nxi = Neta = Nzeta.
+            If type_eval is 'grid' the evaluation willb e done by tensor product
+            The default is 'list'.
+        P: array numpy
+
+        Returns
+        -------
+        array numpy
+            (x, y, z) array containing the coordinate in physical space.
+            If type_eval is 'list' x, y, z have the shape (Nxi,) 
+            If type_eval is 'grid' x, y, z have the shape (Nxi * Neta * Nzeta,) 
+
+        """
+        
+        spline = self.spline
+        ctrlPts = self.N2CtrlPts()
+        if self.dim == 2:
+             
+            XI = [xi, eta]
+            
+            if type_eval == 'list':
+                XI = np.array(XI)
+            
+            if P is None:
+                Px = ctrlPts[0].ravel()
+                Py = ctrlPts[1].ravel()
+            else:
+                Px = P[:, 0]
+                Py = P[:, 1]
+            
+            N = spline.DN(XI, k=[0, 0])
+
+            x = N @ Px
+            y = N @ Py
+            
+            return x, y
+        
+        elif self.dim == 3:
+            
+            XI = [xi, eta, zeta]
+            
+            if type_eval == 'list':
+                XI = np.array(XI)
+            
+            
+            N = spline.DN(XI, k=[0, 0, 0])
+            
+            if P is None:
+                Px = ctrlPts[0].ravel()
+                Py = ctrlPts[1].ravel()
+                Pz = ctrlPts[2].ravel()
+            else:
+                Px = P[:, 0]
+                Py = P[:, 1]
+                Pz = P[:, 2]
+
+            x = N @ Px
+            y = N @ Py
+            z = N @ Pz
+            
+            return x, y, z
+            
+
+    def ShapeFunctions(self, xi, eta, zeta=None, type_eval='list'):
+        """
+        
+
+        Parameters
+        ----------
+        xi : array numpy
+            DESCRIPTION.
+        eta : array numpy
+            DESCRIPTION.
+        zeta : array numpy, optional
+            DESCRIPTION. The default is None.
+
+        Returns
+        -------
+        N, dNdxi, dNdeta, dNdzeta
+            Matrice 
+
         """
 
-        spline = bs.BSpline(self.degree, self.knotVect)
+        spline = self.spline
+        ctrlPts = self.N2CtrlPts()
+
 
         if self.dim == 2:
+            
+            XI = [xi, eta]
+            if type_eval == 'list':
+                XI = np.array(XI)
+            
+            Px = ctrlPts[0].ravel()
+            Py = ctrlPts[1].ravel()
 
-            # print(spline.getSpans())
-            phi = spline.DN([xi, eta], k=[0, 0])
+            N = spline.DN(XI, k=[0, 0])      
+            dNdxi = spline.DN(XI, k=[1, 0])
+            dNdeta = spline.DN(XI, k=[0, 1])
 
-            dphidxi = spline.DN([xi, eta], k=[1, 0])
-            dphideta = spline.DN([xi, eta], k=[0, 1])
 
-            if P is None:
-                P = self.Get_P()
-
-            dxdxi = dphidxi.dot(P[:, 0])
-            dxdeta = dphideta.dot(P[:, 0])
-            dydxi = dphidxi.dot(P[:, 1])
-            dydeta = dphideta.dot(P[:, 1])
-
+            dxdxi = dNdxi @ Px
+            dxdeta = dNdeta @ Px 
+            dydxi = dNdxi @ Py
+            dydeta = dNdeta @ Py 
+            
             detJ = dxdxi*dydeta - dydxi*dxdeta
 
-            dphidx = sps.diags(dydeta/detJ).dot(dphidxi) + \
-                sps.diags(-dydxi/detJ).dot(dphideta)
-            dphidy = sps.diags(-dxdeta/detJ).dot(dphidxi) + \
-                sps.diags(dxdxi/detJ).dot(dphideta)
+            dNdx = sps.diags(dydeta/detJ).dot(dNdxi) + \
+                sps.diags(-dydxi/detJ).dot(dNdeta)
+            dNdy = sps.diags(-dxdeta/detJ).dot(dNdxi) + \
+                sps.diags(dxdxi/detJ).dot(dNdeta)
 
-            return phi, dphidx, dphidy, detJ
+            return N, dNdx, dNdy, detJ
 
         elif self.dim == 3:
 
-            phi = spline.DN([xi, eta, zeta], k=[0, 0, 0])
+            XI = [xi, eta, zeta]
+            if type_eval == 'list':
+                XI = np.array(XI)            
 
-            dphidxi = spline.DN([xi, eta, zeta], k=[1, 0, 0]).tocsc()
-            dphideta = spline.DN([xi, eta, zeta], k=[0, 1, 0]).tocsc()
-            dphidzeta = spline.DN([xi, eta, zeta], k=[0, 0, 1]).tocsc()
+            Px = ctrlPts[0].ravel()
+            Py = ctrlPts[1].ravel()
+            Pz = ctrlPts[2].ravel()
+            
+            N = spline.DN(XI, k=[0, 0, 0]) 
+            dNdxi = spline.DN(XI, k=[1, 0, 0])
+            dNdeta = spline.DN(XI, k=[0, 1, 0])
+            dNdzeta = spline.DN(XI, k=[0, 0, 1])
 
-            if P is None:
-                P = self.Get_P()
 
-            dxdxi = dphidxi.dot(P[:, 0])
-            dxdeta = dphideta.dot(P[:, 0])
-            dxdzeta = dphidzeta.dot(P[:, 0])
+            dxdxi = dNdxi @ Px  #dphidxi.dot(P[:, 0])
+            dxdeta = dNdeta @ Px #dphideta.dot(P[:, 0])
+            dxdzeta = dNdzeta @ Px #dphidzeta.dot(P[:, 0])
 
-            dydxi = dphidxi.dot(P[:, 1])
-            dydeta = dphideta.dot(P[:, 1])
-            dydzeta = dphidzeta.dot(P[:, 1])
+            dydxi = dNdxi @ Py # dphidxi.dot(P[:, 1])
+            dydeta = dNdeta @ Py #dphideta.dot(P[:, 1])
+            dydzeta = dNdzeta @ Py #dphidzeta.dot(P[:, 1])
 
-            dzdxi = dphidxi.dot(P[:, 2])
-            dzdeta = dphideta.dot(P[:, 2])
-            dzdzeta = dphidzeta.dot(P[:, 2])
+            dzdxi = dNdxi @ Pz #dphidxi.dot(P[:, 2])
+            dzdeta = dNdeta @ Pz #dphideta.dot(P[:, 2])
+            dzdzeta = dNdzeta @ Pz #dphidzeta.dot(P[:, 2])
 
             # Applying Sarrus Rules :
             """
@@ -1875,24 +2013,48 @@ class BSplinePatch(object):
             ComJ_23 = -(dxdxi * dzdeta - dzdxi * dxdeta)
             ComJ_33 = dxdxi * dydeta - dydxi * dzdeta
 
-            dphidx = sps.diags(ComJ_11/detJ).dot(dphidxi) + \
-                sps.diags(ComJ_12/detJ).dot(dphideta) + \
-                sps.diags(ComJ_13/detJ).dot(dphidzeta)
-            dphidy = sps.diags(ComJ_21/detJ).dot(dphidxi) + \
-                sps.diags(ComJ_22/detJ).dot(dphideta) + \
-                sps.diags(ComJ_23/detJ).dot(dphidzeta)
-            dphidz = sps.diags(ComJ_31/detJ).dot(dphidxi) + \
-                sps.diags(ComJ_32/detJ).dot(dphideta) + \
-                sps.diags(ComJ_33/detJ).dot(dphidzeta)
+            dNdx = sps.diags(ComJ_11/detJ).dot(dNdxi) + \
+                sps.diags(ComJ_12/detJ).dot(dNdeta) + \
+                sps.diags(ComJ_13/detJ).dot(dNdzeta)
+            dNdy = sps.diags(ComJ_21/detJ).dot(dNdxi) + \
+                sps.diags(ComJ_22/detJ).dot(dNdeta) + \
+                sps.diags(ComJ_23/detJ).dot(dNdzeta)
+            dNdz = sps.diags(ComJ_31/detJ).dot(dNdxi) + \
+                sps.diags(ComJ_32/detJ).dot(dNdeta) + \
+                sps.diags(ComJ_33/detJ).dot(dNdzeta)
 
-            return phi, dphidx, dphidy, dphidz, detJ
+            return N, dNdx, dNdy, dNdz, detJ
 
     def PlaneWave(self, T):
         V = np.zeros(self.ndof)
         V[self.conn[:, 0]] = np.cos(self.n[:, 1] / T * 2 * np.pi)
         return V
     
-    def RemoveDoubleNodes(self):
+    def RemoveUnusedNodes(self):
+        """
+        Removes all the nodes that are not connected to a Patch and
+        renumbers the element table. Both self.e and self.n are changed
+
+        Usage :
+            m.RemoveUnusedNodes()
+
+        Returns
+        -------
+        None.
+
+        """
+        used_nodes = np.zeros(0, dtype=int)
+        for ie in self.e.keys():
+            used_nodes = np.hstack((used_nodes, self.e[ie].ravel()))
+        used_nodes = np.unique(used_nodes)
+        table = np.zeros(len(self.n), dtype=int)
+        table[used_nodes] = np.arange(len(used_nodes))
+        self.n = self.n[used_nodes, :]
+        for ie in self.e.keys():
+            self.e[ie] = table[self.e[ie]]
+            
+            
+    def RemoveDoubleNodes(self, eps=None):
         """
         Removes the double nodes thus changes connectivity
         Warning: both self.e and self.n are modified!
@@ -1901,8 +2063,38 @@ class BSplinePatch(object):
             m.RemoveDoubleNodes()
 
         """
-        nnew = np.unique(self.n, axis=0)
-        self.n = nnew
+
+        if eps is None:
+            eps = 1e-5 * self.GetApproxElementSize()
+        scale = 10 ** np.floor(np.log10(eps))  # tolerance between two nodes
+        nnew = np.round(self.n/scale) * scale
+        _, ind, inv = np.unique(nnew, axis=0, return_index=True,
+                                   return_inverse=True)
+        self.n = self.n[ind]  # keep the initial precision of remaining nodes
+        for k in self.e.keys():
+            self.e[k] = inv[self.e[k]]
+        
+        # self.C = self.Connectivity_Matrix()
+            
+    def RemoveDoubleNodesKnots(self, eps=None):
+        """
+        Removes the double nodes thus changes connectivity
+        Warning: both self.e and self.n are modified!
+
+        Usage :
+            m.RemoveDoubleNodes()
+
+        """
+
+        if eps is None:
+            eps = 1e-5 * self.GetApproxElementSize()
+        scale = 10 ** np.floor(np.log10(eps))  # tolerance between two nodes
+        nnew = np.round(self.n_knots/scale) * scale
+        _, ind, inv = np.unique(nnew, axis=0, return_index=True,
+                                   return_inverse=True)
+        self.n_knots = self.n_knots[ind]  # keep the initial precision of remaining nodes
+        for k in self.e_knots.keys():
+            self.e_knots[k] = inv[self.e_knots[k]]
 
 
 def Rectangle(roi, n_elems, degree):

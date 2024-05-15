@@ -47,7 +47,7 @@ if rank == 0 :
 # %% Initialisation
 m.Connectivity()
 if rank == 0: 
-    U0 = px.MultiscaleInit(f, g, m, cam, scales=[2, 1], direct=False)
+    U0 = px.MultiscaleInit(f, g, m, cam, scales=[3, 2, 1], direct=False)
 #U0 = np.zeros((m.n.shape[0] * 3))
 # %% Building evaluation points
 m2 = m.Copy()
